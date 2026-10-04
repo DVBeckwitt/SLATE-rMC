@@ -10,7 +10,7 @@ import json
 import platform
 import subprocess
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import asdict, replace
+from dataclasses import replace
 from pathlib import Path
 from time import perf_counter
 
@@ -43,7 +43,6 @@ from rasim_next.fitting.native_workflow import (
     make_native_evaluator,
     native_physics_with,
     native_prediction_group,
-    prepare_native_axial_meshes,
 )
 from rasim_next.io.diagnostics import validate_diagnostic_destination, write_diagnostic
 from rasim_next.pipeline.detector_revisions import _instrument_revision
@@ -102,11 +101,6 @@ def main():
     parser.add_argument("--observations", type=Path, required=True)
     parser.add_argument("--plan", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument(
-        "--prepare-axial-mesh",
-        action="store_true",
-        help="Prepare an error-adapted frozen mesh; do not run a fit",
-    )
     parser.add_argument(
         "--resume",
         action="store_true",
@@ -362,55 +356,6 @@ def main():
             c_bounds_A=(parameters[1].lower, parameters[1].upper),
         )
     start_time = perf_counter()
-    if args.prepare_axial_mesh:
-        if args.resume or args.output.exists():
-            raise ValueError("mesh preparation requires a new diagnostic output")
-        if "synthetic" in plan:
-            raise ValueError(
-                "mesh preparation requires measured observations, not a synthetic fit plan"
-            )
-        specification = plan["axial_adaptation"]
-        target = training_observations(observations, mask) if training is not None else observations
-        rule, report = prepare_native_axial_meshes(
-            physics,
-            target,
-            plan,
-            specification["initial_meshes"],
-            fixed_scale=specification["fixed_scale"],
-            maximum_panels=specification.get("maximum_panels", 2048),
-            maximum_passes=specification.get("maximum_passes", 12),
-        )
-        reference, refined = report.pop("reference"), report.pop("refined")
-        report["comparison"] = {
-            name: value.tolist() if isinstance(value, np.ndarray) else value
-            for name, value in report["comparison"].items()
-        }
-        write_diagnostic(
-            args.output,
-            arrays=dict(
-                reference=reference,
-                refined=refined,
-                qualification_candidates=np.asarray(plan["qualification_candidates"]),
-            ),
-            manifest=dict(
-                schema="rasim-native-axial-mesh-v1",
-                implementation=_implementation_record(),
-                plan=plan,
-                physics_input_revision=original.input_revision,
-                observation_input_revision=observations.input_revision,
-                plan_sha256=hashlib.sha256(plan_bytes).hexdigest(),
-                integration_override=asdict(rule),
-                report=report,
-                elapsed_seconds=perf_counter() - start_time,
-                acceptance="empirical_mesh_agreement_only",
-            ),
-            repository_root=Path(__file__).resolve().parents[1],
-        )
-        print(
-            json.dumps(dict(output=str(args.output), execution_status="axial_mesh_prepared")),
-            flush=True,
-        )
-        return
     arrays, history = {}, []
     manifest = dict(
         schema="rasim-native-refinement-result-v2",
@@ -1053,15 +998,9 @@ def main():
                 for i, control in enumerate(controls):
                     signal = np.zeros(control.projection.observation_count)
                     for part in bound.integration_parts():
-                        detector = part.detector(mosaic=evaluator.proposal_mosaic, **arguments)
-                        response = detector.compile_native_response(
-                            control.projection, worker_count=plan["workers"]
-                        )
-                        signal += scale * response.evaluate(
-                            mosaic=mosaic,
-                            thickness_A=arguments["film_thickness_A"],
-                            specular_stitch_stack=stack,
-                        )
+                        detector = part.detector(mosaic=mosaic, **arguments)
+                        detector = replace(detector, specular_stitch_stack=stack)
+                        signal += scale * detector.integrate_native_regions(control.projection)
                     diagnostic = control.signal_diagnostic(signal)
                     arrays[f"control_{label}_{i}_signal_count"] = signal
                     arrays[f"control_{label}_{i}_split"] = control.split
@@ -1085,7 +1024,6 @@ def main():
                             numerical_status="not_qualified",
                         )
                     )
-                    del response
                     save()
                     print(
                         json.dumps(

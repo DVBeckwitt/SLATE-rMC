@@ -6,9 +6,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
+import numba
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
-from scipy.sparse import csr_matrix
+from scipy.sparse import csc_matrix, csr_matrix
 
 from rasim_next.core.contracts import canonical_revision_sha256
 
@@ -190,6 +191,18 @@ class ContinuousRegionQuadrature:
         return result
 
 
+@numba.njit(nogil=True)
+def _accumulate_native_patch(result, bounds, image, flat, columns, ptr, owner, weight):
+    r0, r1, c0, c1 = bounds
+    for row in range(r0, r1):
+        first = np.searchsorted(flat, row * columns + c0)
+        stop = np.searchsorted(flat, row * columns + c1)
+        for pixel in range(first, stop):
+            value = image[row - r0, flat[pixel] % columns - c0]
+            for membership in range(ptr[pixel], ptr[pixel + 1]):
+                result[owner[membership]] += weight[membership] * value
+
+
 @dataclass(frozen=True, slots=True)
 class NativePixelRegionProjection:
     """Sparse continuous-region projection of a native pixel count field."""
@@ -202,6 +215,9 @@ class NativePixelRegionProjection:
     observation_count: int
     quadrature_revision: str
     projection_revision: str = field(init=False)
+    _patch_membership: tuple[IntArray, IntArray, FloatArray] = field(
+        init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         shape_rc = tuple(self.detector_shape_rc)
@@ -246,6 +262,16 @@ class NativePixelRegionProjection:
         object.__setattr__(self, "pixel_column_index", pixel_column)
         object.__setattr__(self, "detector_area_weight_px2", weight)
         object.__setattr__(self, "observation_count", count)
+        membership = csc_matrix(
+            (weight, (observation, pixel_column)), shape=(count, len(flat_pixel))
+        )
+        membership.sum_duplicates()
+        membership.sort_indices()
+        prepared = (membership.indptr, membership.indices, membership.data)
+        for value in prepared:
+            value.setflags(write=False)
+        object.__setattr__(self, "_patch_membership", prepared)
+
         object.__setattr__(
             self,
             "projection_revision",
@@ -271,6 +297,36 @@ class NativePixelRegionProjection:
         ).astype(np.float64, copy=False)
         result.setflags(write=False)
         return result
+
+    def accumulate_native_patch(self, result: FloatArray, bounds, image: FloatArray) -> None:
+        """Accumulate literal fractional pixel memberships, touching only this window."""
+        if len(bounds) != 4 or any(
+            isinstance(v, bool) or not isinstance(v, (int, np.integer)) for v in bounds
+        ):
+            raise ValueError("native patch bounds must contain four integers")
+        r0, r1, c0, c1 = bounds
+        rows, columns = self.detector_shape_rc
+        supplied = np.asarray(image)
+        if np.iscomplexobj(supplied):
+            raise ValueError("native patch mass must be real")
+        image = np.asarray(supplied, dtype=np.float64)
+        if (
+            not isinstance(result, np.ndarray)
+            or result.shape != (self.observation_count,)
+            or result.dtype != np.float64
+            or not result.flags.writeable
+            or np.any(~np.isfinite(result))
+            or np.any(result < 0.0)
+            or np.any(~np.isfinite(image))
+            or np.any(image < 0.0)
+            or image.shape != (r1 - r0, c1 - c0)
+            or not 0 <= r0 < r1 <= rows
+            or not 0 <= c0 < c1 <= columns
+        ):
+            raise ValueError("native patch and writable observation accumulator must align")
+        _accumulate_native_patch(
+            result, bounds, image, self.flat_pixel_index, columns, *self._patch_membership
+        )
 
     def integrate_counts(self, detector_native_counts: ArrayLike) -> tuple[FloatArray, FloatArray]:
         """Return projected count mass and regularized plug-in count covariance.

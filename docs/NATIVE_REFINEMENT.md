@@ -367,8 +367,8 @@ The Python APIs opt into complete component predictions with
 `NativeJointEvaluator.predict(values, N, resolve_mosaic_components=True)`. The
 result has shape `(2, observation)`, ordered Gaussian then Lorentzian, with each
 orientation law normalized separately. Both widths must be positive, even at
-eta endpoints. The response shares strength/transfer work and retains every
-source, rod, signed local-m0 term and optical factor. Default calls still return
+eta endpoints. Each pure law prepares its own dependent axial/angular response,
+retaining every source, rod, signed local-m0 term and optical factor. Default calls still return
 the mixed raw masses. `evaluation_count` counts completed uncached point requests;
 `contraction_count` counts the completed component contractions in every disjoint
 source/rod partition. Compilation remains a separate counter.
@@ -425,8 +425,8 @@ Task 30 records the six concrete acquisition-bound plan and result locations.
 `prediction_workers` defaults to 1. Larger values use one persistent isolated
 process pool for the run; `prediction_group_size` defaults to 16. Each group owns
 an evaluator and reuses exact dependent state across its candidates. Processes
-persist, while evaluator caches are bounded to the group. Numerical projection
-`workers` is a separate setting; avoid nested oversubscription. Only the parent
+persist, while evaluator caches are bounded to the group. Inner preparation
+`workers` must be 1; candidate parallelism uses `prediction_workers`. Only the parent
 profiles scale, computes objectives, records status and writes checkpoints.
 Compilation/cache counters in the runner are explicitly parent-only and cannot
 be interpreted as total worker cost.
@@ -480,117 +480,52 @@ fitted on training alone. A better admissible profile point for any N invalidate
 N's resolved minimum and requires an all-active joint refit. Failed numerical checks or
 unresolved alternatives leave `selected` null, even if an optimizer reports convergence.
 
-Optional `regular_q_bounds_Ainv` and `local_m0_q_bounds_Ainv` freeze conservative proposal
-domains in `integration_override`. They must enclose actual source-region bounds for every
-candidate and refinement; insufficient coverage raises. This stabilizes axial nodes across
-source sample counts without dropping support. `quadrature_kind` defaults to `sobol`;
-`composite_gauss` uses axial CDF panels and separately integrates reachable angular arcs.
-The latter requires seed zero and independent order refinements. Neither rule is qualified
-merely by being deterministic or by passing its analytic quadrature invariant.
-For composite quadrature, `maximum_axial_panel_width_Ainv` caps the physical width of
-inverse-CDF panels through recursive bisection. Refine the cap independently of the
-angular order. This prevents large physical gaps between concentrated proposal peaks;
-it does not replace the observable accuracy gate.
+The sole regular engine prepares positive strength-weighted Gaussian axial rules.
+Its scalar measure is W(u) du, W=S+(u)+S-(u), from the canonical physical rod,
+population and incoherent-mixture table. Cheap physical GL16 seed masses resolve
+repeat/endpoint fringes using actual finite phase-depth extent, including unwrapped
+CIF sites and Pb partial endpoints. Response panels include elastic, visibility and
+mosaic-fold landmarks. No strength threshold removes a panel. Provably zero
+populations/occupancies contribute zero; unresolved sampled-zero measures fail.
 
-Use `angular_support="fixed_union"` to keep the conservative angular domain independent
-of individual observation Q boundaries. The default `"q_conditioned_union"` preserves
-compatibility. Fixed support removes a demonstrated remeshing discontinuity, but its
-angular resolution must still be independently qualified. Observation grouping was an
-unsuccessful numerical prototype and is not a supported control.
+`strength_gauss_order=4` constructs interior positive nodes by reorthogonalized
+Stieltjes recurrence and tridiagonal eigensolve. Coordinate scaling conditions the
+recurrence while physical mass is restored without another Jacobian. Legendre
+moments through degree 2n-1 check the discrete scalar measure. They do not establish
+continuous scalar resolution or detector-observable axial accuracy. Refine
+`strength_scalar_order`, `strength_scalar_phase_step_rad` and `strength_gauss_order`
+against independent observable evidence. CIF, Pb finite surfaces and Bi2X3 finite
+stacks use their authoritative strengths; unsupported custom providers raise.
 
-By default (`angular_integration="native_panels"`), native fitting and rendering
-resolve the angular proposal against
-their complete requested detector support. Geometry-only tiles (at most 64 pixels
-per side, at most 65536 tiles per source/channel) provide corner/center rates of
-Gaussian-kernel and pixel motion. Each tile's physical-angle width applies only
-inside its original conservative Q/angular envelope. These envelopes refine the
-mesh; they do not prune the integration union or omit observations. Whole-panel
-rendering uses the same selector with its own complete panel support.
-Witness rates are normalized by their physical Ewald-circle radius, then scaled
-to each axial node's radius. This avoids applying the motion of a large circle to
-a nearly collapsed endpoint circle. At zero radius only the geometry cap is
-removed; angular measure and proposal panels remain. Tiles without propagating
-witnesses add no geometry cap and still retain their original proposal support.
-An entirely degenerate set of propagating witnesses fails explicitly. These
-sampled seeds do not replace observable convergence checks.
+S+/W and S-/W accompany W du through the shared transport compiler. Original source,
+optical/polarization, cone density, attenuation, phase and deposition factor owners
+remain. Each angular GL8 parent and its two children compile jointly. Tiled native
+L1 parent/child indicators use `pixel_error_rtol=5e-5`, `pixel_error_atol=1e-15`;
+absolute tolerance divides over all source/group/response-panel slots. Accepted
+children retain patches; rejected children become cached coarse values. The empirical
+indicator can miss common unresolved structure. It is not an axial error bound,
+continuous-density proof or numerical fit qualification.
 
-`angular_resolution_fraction` defaults to 0.5 and controls panel width relative to
-the local spatial response scale; halve it for independent angular refinement.
-The ordinary angular rule uses GL8 in each proposal-CDF panel, with inverse-density
-weights restoring physical `dphi`. `angular_power` supplies
-`2**max(0, angular_power-3)` initial panels per arc. Powers below 3 therefore share
-the same initial angular rule. The existing Sobol axial grid is retained when
-`quadrature_kind="sobol"`; its angular integration is now deterministic conditional
-quadrature. Low-level coordinate calls without resolution inputs retain the paired
-proposal. The explicit `angular_integration="nominal"` option exposes that same
-existing coordinate rule through the shared fitter and renderer, without native
-resolution panels. It changes the numerical proposal only, not the source
-distribution, supported domain, signed rods, structure, optics or pixel integral.
-Here nominal does not mean a nominal source ray. It is an exploratory quadrature,
-not a numerical qualification or an exact historical replay unless all inputs match.
-Use angular power/order refinement; resolution-fraction changes are ineffective
-in this mode and rejected as numerical checks. Explicit angular edges cannot be
-combined with nominal mode. Mode identity is bound into cached responses.
-Select the nominal route explicitly in a fit plan, for example:
+`angular_initial_power=5` and `pixel_error_initial_width_rad=0.1` seed conditional
+angular panels. `pixel_error_maximum_depth=32`, `maximum_angular_panel_nodes=4194304`
+and `pixel_error_maximum_bytes=268435456` guard work and live patch storage.
+The byte guard excludes caller images, transfer arrays and small metadata; it is
+not an RSS ceiling. Exhaustion raises; accumulated prefixes remain incomplete.
+Spatial order stays 16 with complementary-residual corners and rolling edge/tail reuse.
 
-```json
-{"integration_override": {"angular_integration": "nominal"}}
-```
+Optional `regular_q_bounds_Ainv`, `local_m0_q_bounds_Ainv` and
+`frozen_ewald_bounds_Ainv_rad` must enclose actual candidate support. They do not
+freeze W-dependent nodes or acceptance. Every distinct candidate rebuilds dependent
+preparation, including sites, repeats, lattice, populations, optics, source, geometry,
+thickness and actual mosaic changes.
 
-The saved effective rule is also used by `render_native.py`. Source sample count,
-spectral lines, specimen parameters, observations and objective stay independently
-declared; this switch does not recreate the September 11 fit by itself. Keep the
-existing initial/refined numerical checks and candidate-versus-selected distinction.
-
-In native-panel mode, numerical-check overrides that change power within that
-ineffective range are rejected. A frozen support envelope alone does not freeze the adaptive panels
-when detector or source geometry changes; qualify the actual parameter contrasts.
-
-Corner/center rates are resolution seeds, not a supremum or numerical certificate.
-Refine and qualify the actual observable and parameter contrasts. Fit support is
-not full-image evidence, and image qualification remains separate. No universal
-image tolerance follows from the local angular regression.
-
-`angular_panel_edges_rad` optionally supplies an immutable increasing physical-angle
-partition from exactly `0` to `2*pi`, requiring `composite_gauss`. The sampler merges
-the original support first, then intersects each arc with the partition. Each panel
-uses `2**angular_power` physical Gauss nodes (use power 3 for GL8), or the declared
-local-m0 power where applicable. Weights are `dphi` times the original axial measure;
-the angular proposal CDF/PDF is bypassed, not multiplied in again. No supported arc,
-signed rod, source mass, observation or physical factor is removed. Omitting edges
-uses automatic native resolution. Explicit edges override that selector for
-reproducibility; refine their panel widths and per-panel order explicitly.
-
-`seed_angular_panel_edges(bounds, maximum_panel_width_rad=..., maximum_panels=...)`
-constructs candidate edges from complete native source/region bounds, retaining
-internal boundaries even where support intervals overlap. Supply all required
-observation/source/probe bounds, not only a selected parent or training rows. It caps
-physical widths inside their angular union and retains the outside gaps as panels.
-This is geometry seeding, not a kernel-adaptive selector or accuracy certificate.
-The supplied width must pass full-observable numerical checks; a fine angular rule
-does not qualify axial/source/cone integration. No universal width is prescribed.
-
-The rule's `maximum_angular_panel_nodes` defaults to 4194304 per source/rod-group
-sampler call and rejects excessive automatic or explicit-panel work before yielding
-any coordinates. It is a work guard, not a numerical-refinement override. The seeder
-also fails when its declared panel budget is exceeded; neither uses a coarse fallback.
-Edges are included in native revisions, cache keys and serialized rules. For geometry
-or source probes, fixed edges alone do not freeze changing support: prepare a common
-enclosing `frozen_ewald_bounds_Ainv_rad` and common axial rule as well. Reuse one mesh
-across the planned candidates, and independently qualify its observable contrasts.
-The bound applies to the entire sampler call, not each axial row. A fine mesh over
-a large axial domain may exceed it; the demonstrated one-row cost is not a bound
-for a full family. Do not silently raise the budget or relabel such a rejection
-as numerical convergence.
-
-Coordinates and transfers stream in batches, including splits within an axial row
-or panel. Every batch retains the complete axial grid and global axial indices,
-so cached structure factors cannot alias a slice-local grid. Automatic preparation
-still stores five arrays per accepted panel (40 bytes per panel, plus construction
-storage); retained sparse responses have a separate memory cost. Batch size only
-bounds temporary joint-coordinate/transfer arrays. Numerical algorithm v2 and the
-resolution fraction are bound to native identities and serialized rules, preventing
-reuse of a pre-migration response or checkpoint.
+The required local-m0 endpoint chart keeps `local_m0_axial_power=12`,
+`local_m0_angular_power=5`, `local_m0_seed=0`, `local_m0_peak_spacing_L=1`,
+`local_m0_peak_half_width_L=0.02`, `local_m0_angular_resolution_fraction=0.5` and
+explicit `local_m0_axial_peak_coordinate`. Its external-Q endpoint transformation
+and empirical composite remain; it is not a competing regular engine. Ordinary
+selectors, manual meshes and sparse detector responses have retired. Migrate inputs
+explicitly as documented in [ENGINE_MIGRATION.md](ENGINE_MIGRATION.md).
 
 `stitch_grid_size` refines the empirical Bi handoff calculation. Baseline, numerical
 probes, reported fits, local-sensitivity probes and profile candidates record the
@@ -604,11 +539,11 @@ complete `[5Qc,10Qc]` interval. This named extension avoids counting grid points
 measure. The default `sampled_log_median` preserves manuscript compatibility. The first
 divergence is overlap normalization; automatic/fallback blend-window selection is unchanged.
 
-The explicit response cache retains at most two geometry responses per rod partition
-and 64 small prediction vectors. Response v2 excludes source masses: line probability updates
-reuse per-line geometry and multiply current aligned normalized weights exactly
-once, including zero-probability endpoints. Atomic z/ADPs, stacking, mosaic,
-population weights, thickness and roughness recompute their physical intensity.
+The exact candidate cache retains at most 64 completed small prediction vectors,
+keyed by float64 parameters, integer N and mixed/component observable within one
+immutable evaluator/projection owner. Complete G/L output independently prepares
+both pure laws, even at eta endpoints. Source probabilities apply once without
+survivor renormalization. Changed strength/mosaic requires fresh preparation.
 
 `FiberScatteringCache` separately retains pre-projection scattering, bounded by
 256 MiB and 4096 entries. Detector corrections, sample normal translation and
@@ -632,8 +567,7 @@ partition's revision, completed batch count and completion flag.
 For stationary proposals across transport perturbations, declare
 `frozen_ewald_bounds_Ainv_rad=[Q_low,Q_high,arc_start,arc_width]` in the integration
 rule. It must enclose each candidate's conservative source/region support; otherwise
-evaluation raises. Default adaptive proposals remain available but may miss this
-cache when geometry changes. Domain coverage does not establish quadrature accuracy.
+evaluation raises. Candidate-specific preparation remains required when geometry changes. Domain coverage does not establish quadrature accuracy.
 There is no permanent finite response valid for arbitrary materials or parameters.
 Native pixels reuse integrated corners on two rolling column edges. Native region
 rectangles share physical corner identities within one Gaussian. Near unit
@@ -729,65 +663,21 @@ unchanged.
 Only prediction calculation may be concurrent. Scale scoring, calibration, guards,
 best-point updates and callbacks execute serially in the original candidate order.
 Callbacks must not alter predictor state within a batch. The caller owns worker isolation:
-native response caches and XrayDB sessions must not be shared between concurrent workers.
-Process workers should receive explicit model state and return prediction arrays; the
-parent owns diagnostic writes. Reuse an existing response for inexpensive coordinates
-before distributing geometry-changing predictions. Historical-guard constraint derivatives
+candidate/scattering caches and XrayDB sessions must not be shared between workers.
+Processes receive explicit model state and return prediction arrays; the parent owns
+diagnostic writes. Each distinct candidate reprepares dependent strength/angular state. Historical-guard constraint derivatives
 remain serial in SciPy. Batching changes execution cost, not numerical qualification.
 The multi-choice refit/profile wrappers reject a shared batch callable when more than
 one discrete choice is supplied. Bind scalar and batched predictions to the same N and
 call the single-choice search separately; a callable bound to one N cannot supply the
 finite differences of another.
 
-## Opt-in axial preparation and reference proposals
+## Reference proposals
 
-The declared spatial quadrature order controls both Plackett-angle and
-conditional-CDF rectangle integration, identically for native regions and pixels.
-Order 16 is unchanged. Lower orders no longer inherit a hidden angle-order floor;
-previous lower-order qualifications must therefore be repeated. Spatial-order
-checks remain independent of source, angular and axial refinement, and the
-Gaussian tail bound does not include rectangle-quadrature error.
-
-`AxialPanelMesh` declares a complete radial rod group, a physical coordinate and
-strictly increasing edges in inverse angstroms. Use `positive_phase_axial` for
-regular rods or `external_local_m0_q` for local m0. Every signed rod remains present.
-Edges must enclose source/detector support throughout the intended neighborhood;
-insufficient meshes raise rather than crop the model.
-
-`FiberIntegrationRule.axial_meshes` selects physical GL8 panels. It requires
-`quadrature_kind="composite_gauss"`, `axial_power=3`, zero seed and no width caps.
-Refine edges, not the now-inactive axial importance-proposal metadata. Angular,
-source and cone integration remain independently controlled. The public
-`NativeJointEvaluator.predict_axial_panels(values, N)` returns nonnegative raw
-`(panel, observation)` contributions through the ordinary response and factors.
-Their sum recovers `predict`; source partitions retain global panel ordering.
-
-For preparation, use a measured-data plan with one `repeat_choices` entry,
-center-first `qualification_candidates` containing the actual optimizer stencil,
-existing `numerical_tolerances`, and an `axial_adaptation` object containing:
-
-- `initial_meshes`: complete rod groups, each with `rods_hk`, `coordinate` and
-  `edges_Ainv`; seed known narrow peaks, optical transitions and support boundaries.
-- `fixed_scale`: the positive reference scale in the objective's count units.
-- `maximum_panels` (default 2048) and `maximum_passes` (default 12): explicit work limits.
-
-Run `scripts/refine_native.py` with the usual inputs/output and `--prepare-axial-mesh`.
-Preparation applies the input rule's global/local-m0 physical panel-width limits
-to every initial gap before adaptation, retaining all supplied and elastic-cutoff
-edges. The local limit overrides the global limit only for local m0. Excessive
-seed size fails before evaluating predictions; the work budget includes children.
-The returned explicit mesh has no separate width cap because its edges carry it.
-Each GL8 panel is compared with two GL8 children. Covariance-whitened prediction and
-stencil-contrast errors prioritize refinement; the whole-vector objective gate also
-must pass. Training splits use training rows only. Each N is prepared separately so
-its own center defines contrasts. Work-budget exhaustion raises explicitly.
-
-The external `rasim-native-axial-mesh-v1` diagnostic retains plan/input/source hashes,
-stencil vectors, parent/child evidence, costs and the prepared `integration_override`.
-Copy that override into the normal fit/render plan and freeze it during nearby steps.
-Qualify independently: **both parent and child rules can miss a narrow peak.**
-Preparation is neither a certified bound nor fit selection. Cross-N ranking,
-source/angular refinement and held-out validation keep their ordinary gates.
+Physical regular panels are prepared internally by the sole strength-Gauss engine.
+Manual axial-mesh preparation and panel-prediction APIs have retired. Historical
+diagnostics are evidence only. Current qualification still needs independently
+declared source/angular/axial comparisons.
 
 An optional stage `reference_correction` object contains `numerical_override`
 (the cheaper source/integration rule), positive `trust_radii` in physical parameter
@@ -805,7 +695,7 @@ The helper produces only a warm start; the ordinary all-active high-rule stage
 follows. Fixed controls, calibration ownership and guards remain unchanged.
 Resume restores exact rows and restarts proposal work. Include setup, cheap calls,
 rejections and final exact fitting in benchmarks: short/cheap fits can be slower.
-Both accelerators are opt-in, never enabled automatically by a preparation pass.
+Reference correction is opt-in; low and high rules use the current engine.
 
 Long inversion-paired axial rows share atomic geometric sums automatically:
 per-species `G(-Q)=conj(G(Q))`, but anomalous `f` stays unchanged. Generally
@@ -817,8 +707,8 @@ stacking implementation or intensity-equality assumption is introduced.
 
 ## Full display support
 
-`render_native.py --candidate --full-image --bin-size-px 12` reproduces the saved
-unqualified candidate before integrating complete 12x12 native-pixel rectangles.
+`render_native.py --candidate --full-image --bin-size-px 12` replays a saved
+current-engine candidate under its bound input/source identity before summing integrated native pixel masses into 12x12 display cells.
 Bin size must divide the detector dimensions. Output is `simulated_detector_cell_count`
 with native-coordinate cell centers; size1 retains `simulated_detector_native_count`.
 Mass is integrated, not sampled/interpolated. No display-only scale or background is fitted.
@@ -868,21 +758,10 @@ Callbacks receive every distinct evaluation for caller-owned accounting. Objecti
 gradient and accepted-iteration counts remain separate from distinct evaluations.
 
 
-## Bounded cone-law reuse
+## Candidate preparation and cache limits
 
-`NativeMosaicCache` retains at most two exact Gaussian width/order entries and
-one Lorentzian entry, owned by one immutable `NativeFiberResponse`. Hits promote
-the entry; misses recompute through the same cone-density owner. This allows a
-base Gaussian width to survive a nearby finite-difference width. The Lorentzian
-law remains inexpensive and keeps one entry. Eta, thickness, atomic structure
-and attenuation do not change these normalized laws. Material, reciprocal-basis,
-source and geometry invalidations remain unchanged, as do all component factors.
-
-`maximum_extra_gaussian_bytes` defaults to 256 MiB of retained NumPy payload
-beyond the most recent Gaussian entry. An older entry exceeding this budget is
-evicted; zero retains exactly one entry, including an empty response. The byte
-budget is per response, not a process-memory ceiling. A Gaussian miss can
-transiently hold its previous two entries and the newly computed entry. Callers
-still own process memory admission. No sampling rule, physical approximation or
-qualification status follows from reuse; workload evidence must include cache
-state, preparation, current strength evaluation and transient memory.
+No retained mosaic-density or strength-free detector-response cache remains.
+Each pure or mixed law prepares its own angular acceptance with candidate and
+observable identity. Exact completed prediction and upstream scattering reuse do
+not imply convergence. Work accounting includes preparation, rejected panels,
+source channels, failed calls and caller-owned image storage.

@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from collections import deque
+import json
 from collections.abc import Callable, Iterator
-from concurrent.futures import CancelledError, ThreadPoolExecutor
-from dataclasses import dataclass, field, replace
+from concurrent.futures import CancelledError
+from dataclasses import asdict, dataclass, field, replace
+from functools import partial
+from itertools import pairwise
 
 import numba
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
-from scipy.sparse import csr_matrix
 
 from painted_ewald import MosaicParameters, Rod
 from painted_ewald.normal_density import SphericalMosaicDensity
@@ -40,9 +41,15 @@ from rasim_next.pipeline.fiber_detector import (
     FiberScatteringCache,
     iter_conditional_fiber_transfers,
 )
+from rasim_next.pipeline.pixel_error import iter_pixel_error_batches
 from rasim_next.pipeline.source_spatial import (
-    NativeSpatialRegionProjection,
     validate_conditional_spatial_support,
+)
+from rasim_next.pipeline.strength_gauss import (
+    finite_stack_resolution,
+    identically_zero_strength,
+    prepare_positive_axial_rule,
+    response_panel_edges,
 )
 from rasim_next.reflectivity.specular import (
     LOCAL_LAMELLA_INTERFACE,
@@ -208,34 +215,6 @@ def _response_nodes(
     )
 
 
-def _project_batches(batches, projector, order, tail_radius, worker_count):
-    """At most worker_count spatial jobs in flight; yield in source iterator order."""
-    if worker_count == 1:
-        for batch in batches:
-            yield (
-                batch,
-                projector.probabilities(
-                    batch.transfer.spatial, quadrature_order=order, gaussian_tail_radius=tail_radius
-                ),
-            )
-        return
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        pending = deque()
-        for batch in batches:
-            future = executor.submit(
-                projector.probabilities,
-                batch.transfer.spatial,
-                quadrature_order=order,
-                gaussian_tail_radius=tail_radius,
-            )
-            pending.append((batch, future))
-            if len(pending) >= worker_count:
-                first, result = pending.popleft()
-                yield first, result.result()
-        for first, result in pending:
-            yield first, result.result()
-
-
 def _event_mass(
     nodes: FiberResponseNodes,
     strength: FloatArray,
@@ -274,274 +253,6 @@ def _event_mass(
             decay, 0.0, thickness_A
         ) / uniform_depth_attenuation(decay, 0.0, nodes.reference_thickness_A)
     return mass * coefficient
-
-
-@dataclass(frozen=True, slots=True)
-class NativeMosaicCache:
-    """Explicit bounded execution state for one immutable response's cone averages.
-
-    Retain two Gaussian width/order entries and one cheap Lorentzian entry.
-    The older Gaussian uses at most maximum_extra_gaussian_bytes beyond the
-    current entry; zero preserves single-entry retention. Eta, thickness and
-    structure do not alter the laws. Entries belong to this exact response.
-    """
-
-    response: NativeFiberResponse
-    maximum_extra_gaussian_bytes: int = 256 * 1024**2
-    _gaussian: tuple = field(default=(), init=False, repr=False)
-    _lorentzian: tuple = field(default=(), init=False, repr=False)
-
-    def __post_init__(self):
-        if (
-            type(self.maximum_extra_gaussian_bytes) is not int
-            or self.maximum_extra_gaussian_bytes < 0
-        ):
-            raise ValueError("extra cone-cache budget must be nonnegative integer bytes")
-
-    def components(
-        self, density: SphericalMosaicDensity, order: int, *, include_inactive: bool = False
-    ) -> tuple:
-        parameters = density.parameters
-        if include_inactive and (
-            parameters.gaussian_sigma_rad <= 0 or parameters.lorentzian_half_width_rad <= 0
-        ):
-            raise ValueError("both component columns require positive mosaic widths")
-        components = []
-        for name, width, active, pure in (
-            (
-                "_gaussian",
-                parameters.gaussian_sigma_rad,
-                parameters.lorentzian_probability < 1,
-                MosaicParameters(parameters.gaussian_sigma_rad, 0.0, 0.0),
-            ),
-            (
-                "_lorentzian",
-                parameters.lorentzian_half_width_rad,
-                parameters.lorentzian_probability > 0,
-                MosaicParameters(0.0, parameters.lorentzian_half_width_rad, 1.0),
-            ),
-        ):
-            if not active and not include_inactive:
-                components.append(None)
-                continue
-            entries = getattr(self, name)
-            key = width, order
-            saved = next((entry for entry in entries if entry[:2] == key), None)
-            if saved is None:
-                law = SphericalMosaicDensity(pure)
-                values = []
-                for node in self.response.nodes:
-                    value = np.array(
-                        [
-                            law.cone_average_sr_inv(
-                                node.polar_angle_rad, opening, quadrature_order=order
-                            )
-                            for opening in (node.cone_angle_rad, np.pi - node.cone_angle_rad)
-                        ]
-                    )
-                    value.setflags(write=False)
-                    values.append(value)
-                saved = (width, order, tuple(values), sum(value.nbytes for value in values))
-            entries = (*[entry for entry in entries if entry[:2] != key][-1:], saved)
-            extra_bytes = self.maximum_extra_gaussian_bytes if name == "_gaussian" else 0
-            if extra_bytes == 0 or (len(entries) == 2 and entries[0][3] > extra_bytes):
-                entries = entries[-1:]
-            object.__setattr__(self, name, entries)
-            components.append(saved[2])
-        return tuple(components)
-
-
-@dataclass(frozen=True, slots=True)
-class NativeFiberResponse:
-    """Immutable native observable; contains no retained Gaussian image kernels."""
-
-    detector: ConditionalStructureDetector
-    grids: tuple[FiberStrengthGrid, ...]
-    nodes: tuple[FiberResponseNodes, ...]
-    region_probability: tuple[csr_matrix, ...]
-    observation_measure_px2: FloatArray
-    projection_revision: str
-    response_revision: str = field(init=False)
-
-    def __post_init__(self) -> None:
-        grids, nodes = tuple(self.grids), tuple(self.nodes)
-        area = _frozen(self.observation_measure_px2)
-        if (
-            np.any(area < 0)
-            or not self.projection_revision
-            or len(nodes) != len(self.region_probability)
-        ):
-            raise ValueError("native response requires aligned probabilities and declared support")
-        probabilities = []
-        for node, supplied in zip(nodes, self.region_probability, strict=True):
-            if not isinstance(supplied, csr_matrix) or not 0 <= node.grid_index < len(grids):
-                raise ValueError("native response grid and sparse probabilities must align")
-            probability = supplied.copy()
-            probability.sum_duplicates()
-            probability.sort_indices()
-            if (
-                probability.shape != (len(node.axial_index), len(area))
-                or np.any(~np.isfinite(probability.data))
-                or np.any(probability.data < 0)
-                or np.any(node.axial_index >= len(grids[node.grid_index].positive_axial_Ainv))
-            ):
-                raise ValueError("native probabilities or axial assignments are invalid")
-            for array in (probability.data, probability.indices, probability.indptr):
-                array.setflags(write=False)
-            probabilities.append(probability)
-        object.__setattr__(self, "grids", grids)
-        object.__setattr__(self, "nodes", nodes)
-        object.__setattr__(self, "region_probability", tuple(probabilities))
-        object.__setattr__(self, "observation_measure_px2", area)
-        object.__setattr__(
-            self,
-            "response_revision",
-            canonical_revision_sha256(
-                ("definition_id", "continuous_conditional_native_response.v2"),
-                ("detector", self.detector.fixed_physics_revision),
-                ("reference_structure", self.detector.strength_model.structure_model_revision),
-                ("projection", self.projection_revision),
-            ),
-        )
-
-    def evaluate(
-        self,
-        strength_model: RevisionedStructureStrengthModel | None = None,
-        *,
-        mosaic: MosaicParameters | None = None,
-        thickness_A: float | None = None,
-        intensity_envelope: SampleQIntensityEnvelope | None = None,
-        specular_stitch_stack: ParrattStitchStack | None = None,
-        mosaic_cache: NativeMosaicCache | None = None,
-        cone_quadrature_order: int | None = None,
-        source_weights: FloatArray | None = None,
-        resolve_axial_panels: bool = False,
-        resolve_mosaic_components: bool = False,
-    ) -> FloatArray:
-        """Return raw integrated A² per native observation.
-
-        resolve_mosaic_components returns (Gaussian/Lorentzian, observation)
-        columns with both normalized laws, independent of eta. Strength tables,
-        signed local-m0, optical factors and spatial probabilities are shared.
-        Both widths must be positive, even at a zero-population boundary.
-        This decomposition cannot be combined with axial-panel resolution.
-        """
-        if type(resolve_mosaic_components) is not bool or (
-            resolve_mosaic_components and resolve_axial_panels
-        ):
-            raise ValueError("choose ordinary, mosaic-component or axial-panel resolution")
-        detector = self.detector
-        weights = (
-            detector.source.mean_rays.source_weight
-            if source_weights is None
-            else np.asarray(source_weights)
-        )
-        if (
-            weights.shape != detector.source.mean_rays.source_weight.shape
-            or np.iscomplexobj(weights)
-            or np.any(~np.isfinite(weights))
-            or np.any(weights < 0)
-            or not np.isclose(weights.sum(), 1.0, rtol=0, atol=2e-15)
-        ):
-            raise ValueError(
-                "source_weights must retain source-row order and normalized nonnegative masses"
-            )
-        if specular_stitch_stack is not None:
-            if detector.specular_stitch_stack is None:
-                raise ValueError("response reuse cannot add a local specular channel")
-            detector = replace(detector, specular_stitch_stack=specular_stitch_stack)
-        model = detector.strength_model if strength_model is None else strength_model
-        detector._validate_strength(model)
-        thickness = (
-            detector.instrument.film_thickness_A if thickness_A is None else float(thickness_A)
-        )
-        if not np.isfinite(thickness) or thickness < 0:
-            raise ValueError("thickness must be finite and nonnegative")
-        density = SphericalMosaicDensity(detector.mosaic if mosaic is None else mosaic)
-        order = (
-            detector.integration_rule.cone_quadrature_order
-            if cone_quadrature_order is None
-            else cone_quadrature_order
-        )
-        if type(order) is not int or order < 4:
-            raise ValueError("cone quadrature order must be an integer of at least four")
-        components = None
-        if resolve_mosaic_components and mosaic_cache is None:
-            mosaic_cache = NativeMosaicCache(self)
-        if mosaic_cache is not None:
-            if mosaic_cache.response is not self:
-                raise ValueError("mosaic cache belongs to another native response")
-            components = mosaic_cache.components(
-                density, order, include_inactive=resolve_mosaic_components
-            )
-        envelope = detector.intensity_envelope if intensity_envelope is None else intensity_envelope
-        tables = [detector._strength_table(grid, model, thickness) for grid in self.grids]
-        meshes = detector.integration_rule.axial_meshes
-        panel_offsets = np.cumsum([0, *(len(m.edges_Ainv) - 1 for m in meshes)])
-        if resolve_axial_panels and not meshes:
-            raise ValueError("panel contributions require explicit axial meshes")
-        result = np.zeros(
-            (int(panel_offsets[-1]), len(self.observation_measure_px2))
-            if resolve_axial_panels
-            else (2, len(self.observation_measure_px2))
-            if resolve_mosaic_components
-            else len(self.observation_measure_px2)
-        )
-        for i, (node, probability) in enumerate(
-            zip(self.nodes, self.region_probability, strict=True)
-        ):
-            cone_density = None
-            if components is not None:
-                gaussian, lorentzian = components
-                if resolve_mosaic_components:
-                    cone_density = np.stack((gaussian[i], lorentzian[i]))
-                else:
-                    eta = density.parameters.lorentzian_probability
-                    cone_density = np.zeros((2, len(node.axial_index)))
-                    if gaussian is not None:
-                        cone_density += (1 - eta) * gaussian[i]
-                    if lorentzian is not None:
-                        cone_density += eta * lorentzian[i]
-            mass = _event_mass(
-                node,
-                tables[node.grid_index],
-                density,
-                thickness,
-                envelope,
-                detector.phase_population_weight
-                * detector.polarization_weight
-                * weights[node.source_state_index],
-                order,
-                cone_density,
-            )
-            if resolve_axial_panels:
-                grid = self.grids[node.grid_index]
-                key = tuple(sorted((r.h, r.k) for r in grid.rods))
-                matches = [j for j, mesh in enumerate(meshes) if mesh.rods_hk == key]
-                if len(matches) != 1:
-                    raise ValueError("every strength grid requires one explicit axial mesh")
-                j = matches[0]
-                coordinate = (
-                    grid.positive_axial_Ainv
-                    if grid.external_q_Ainv is None
-                    else grid.external_q_Ainv
-                )
-                panel = (
-                    np.searchsorted(
-                        meshes[j].edges_Ainv, coordinate[node.axial_index], side="right"
-                    )
-                    - 1
-                )
-                if np.any(panel < 0) or np.any(panel >= len(meshes[j].edges_Ainv) - 1):
-                    raise ValueError("axial mesh does not enclose retained response nodes")
-                reduction = csr_matrix(
-                    (mass, (panel + panel_offsets[j], np.arange(len(mass)))),
-                    shape=(int(panel_offsets[-1]), len(mass)),
-                )
-                result += (reduction @ probability).toarray()
-            else:
-                result += mass @ probability
-        return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -639,12 +350,13 @@ class ConditionalStructureDetector:
         object.__setattr__(self, "rods", rods)
         self._validate_strength(self.strength_model)
         rule = self.integration_rule
+        finite_stack_resolution(self.strength_model)
         stack = self.specular_stitch_stack
         object.__setattr__(
             self,
             "fixed_physics_revision",
             canonical_revision_sha256(
-                ("definition_id", "independent_azimuth_conditional_detector.v2"),
+                ("definition_id", "independent_azimuth_conditional_detector.v3"),
                 ("source", self.source.revision),
                 ("incident_model", self.incident.states.incident_model_id),
                 ("material", self.material.material_revision),
@@ -652,65 +364,20 @@ class ConditionalStructureDetector:
                 ("basis", basis),
                 ("rods", np.array([(r.h, r.k, r.population) for r in rods])),
                 ("rod_catalog", self.rod_catalog_revision),
+                ("engine", "positive_strength_gauss_pixel_error.v1"),
+                ("strength_measure_revision", self.strength_model.structure_model_revision),
+                ("integration_rule", json.dumps(asdict(rule), sort_keys=True, allow_nan=False)),
+                ("overlap_measure", "none" if stack is None else stack.overlap_measure),
                 (
-                    "proposal",
+                    "actual_mosaic",
                     np.array(
                         [
-                            rule.axial_power,
-                            rule.angular_power,
-                            rule.axial_peak_spacing_L,
-                            rule.axial_peak_half_width_L,
-                            rule.source_latent_radius,
-                            rule.maximum_backward_probability,
-                            rule.cone_quadrature_order,
-                            rule.stitch_grid_size,
+                            self.mosaic.gaussian_sigma_rad,
+                            self.mosaic.lorentzian_half_width_rad,
+                            self.mosaic.lorentzian_probability,
                         ]
                     ),
                 ),
-                ("proposal_seed", rule.seed),
-                ("local_m0_axial_peak_coordinate", rule.local_m0_axial_peak_coordinate),
-                ("quadrature_kind", rule.quadrature_kind),
-                ("angular_support", rule.angular_support),
-                ("angular_integration", rule.angular_integration),
-                ("angular_resolution_fraction", rule.angular_resolution_fraction),
-                ("maximum_angular_panel_nodes", rule.maximum_angular_panel_nodes),
-                *(("angular_panel_edges_rad", np.asarray(rule.angular_panel_edges_rad)),)
-                if rule.angular_panel_edges_rad is not None
-                else (),
-                *(
-                    (f"axial_mesh_{i}_rods", np.asarray(mesh.rods_hk, dtype=np.int64))
-                    for i, mesh in enumerate(rule.axial_meshes)
-                ),
-                *(
-                    (f"axial_mesh_{i}_coordinate", mesh.coordinate)
-                    for i, mesh in enumerate(rule.axial_meshes)
-                ),
-                *(
-                    (f"axial_mesh_{i}_edges_Ainv", np.asarray(mesh.edges_Ainv))
-                    for i, mesh in enumerate(rule.axial_meshes)
-                ),
-                (
-                    "local_m0_angular_power",
-                    np.array(())
-                    if rule.local_m0_angular_power is None
-                    else np.array([rule.local_m0_angular_power]),
-                ),
-                ("frozen_ewald_bounds_Ainv_rad", np.array(rule.frozen_ewald_bounds_Ainv_rad or ())),
-                (
-                    "maximum_axial_panel_width_Ainv",
-                    np.array(())
-                    if rule.maximum_axial_panel_width_Ainv is None
-                    else np.array([rule.maximum_axial_panel_width_Ainv]),
-                ),
-                ("regular_q_bounds_Ainv", np.array(rule.regular_q_bounds_Ainv or ())),
-                (
-                    "local_m0_maximum_axial_panel_width_Ainv",
-                    np.array(())
-                    if rule.local_m0_maximum_axial_panel_width_Ainv is None
-                    else np.array([rule.local_m0_maximum_axial_panel_width_Ainv]),
-                ),
-                ("local_m0_q_bounds_Ainv", np.array(rule.local_m0_q_bounds_Ainv or ())),
-                ("overlap_measure", "none" if stack is None else stack.overlap_measure),
                 (
                     "reference_mosaic",
                     np.array(
@@ -811,6 +478,7 @@ class ConditionalStructureDetector:
         *,
         scattering_cache: FiberScatteringCache | None = None,
         include_source_mass: bool = True,
+        source_state_indices: tuple[int, ...] | None = None,
     ) -> Iterator[ConditionalFiberBatch]:
         return iter_conditional_fiber_transfers(
             rods=self.rods,
@@ -827,7 +495,138 @@ class ConditionalStructureDetector:
             cancel_requested=cancel_requested,
             scattering_cache=scattering_cache,
             include_source_mass=include_source_mass,
+            source_state_indices=source_state_indices,
+            regular_integrator=self._regular_product_batches,
         )
+
+    def _regular_strength_at(self, axial, *, rods, wavelength):
+        return self._strength_table(
+            FiberStrengthGrid(rods, wavelength, axial, None),
+            self.strength_model,
+            self.instrument.film_thickness_A,
+        )
+
+    def _batch_pixel_patch(self, batch, *, maximum_bytes, density, mass=None):
+        """Canonical signed contraction before the existing spatial16 deposition."""
+        if mass is None:
+            mass = self._batch_event_mass(batch, density=density)
+        kernels = batch.transfer.spatial
+        bounds = kernels.native_pixel_bounds(
+            self.detector_shape_rc,
+            integrated_mass=mass,
+            gaussian_tail_radius=self.gaussian_tail_radius,
+        )
+        if bounds is None:
+            return None
+        r0, r1, c0, c1 = bounds
+        if (r1 - r0) * (c1 - c0) * 8 > maximum_bytes:
+            raise MemoryError("pixel-error patch budget exhausted before deposition")
+        image = kernels.integrate_native_pixels(
+            (r1 - r0, c1 - c0),
+            integrated_mass=mass,
+            quadrature_order=self.spatial_quadrature_order,
+            gaussian_tail_radius=self.gaussian_tail_radius,
+            row_offset=r0,
+            column_offset=c0,
+        )
+        return bounds, image
+
+    def _batch_pixel_patches(self, batch, *, panel_count, maximum_bytes, density):
+        """Joint cone/event contraction; split only native deposition windows."""
+        if batch is None:
+            return [(None, None)] * panel_count
+        mass = self._batch_event_mass(batch, density=density)
+        transfer = batch.transfer
+        owner = transfer.quadrature_index // 8
+        patches, resident = [], 0
+        for panel in range(panel_count):
+            take = owner == panel
+            if not np.any(take):
+                patches.append((None, None))
+                continue
+            spatial = replace(
+                transfer.spatial,
+                mean_px=transfer.spatial.mean_px[take],
+                factor_px=transfer.spatial.factor_px[take],
+                backward_probability_bound=transfer.spatial.backward_probability_bound[take],
+            )
+            subset = replace(
+                transfer,
+                spatial=spatial,
+                quadrature_index=transfer.quadrature_index[take],
+                polar_angle_rad=transfer.polar_angle_rad[take],
+                cone_angle_rad=transfer.cone_angle_rad[take],
+                coefficient_per_L_rad=transfer.coefficient_per_L_rad[take],
+                phase_q_radial_squared_Ainv2=transfer.phase_q_radial_squared_Ainv2[take],
+                phase_q_normal_squared_Ainv2=transfer.phase_q_normal_squared_Ainv2[take],
+                attenuation_decay_sum_Ainv=(
+                    None
+                    if transfer.attenuation_decay_sum_Ainv is None
+                    else transfer.attenuation_decay_sum_Ainv[take]
+                ),
+            )
+            part = replace(
+                batch,
+                transfer=subset,
+                axial_index=batch.axial_index[take],
+                integrated_coefficient=batch.integrated_coefficient[take],
+            )
+            patch = self._batch_pixel_patch(
+                part, maximum_bytes=maximum_bytes - resident, density=density, mass=mass[take]
+            )
+            resident += 0 if patch is None else patch[1].nbytes
+            patches.append((part, patch))
+        return patches
+
+    def _regular_product_batches(
+        self, *, coordinate_parameters, batch_parameters, cancel_requested, channel_count
+    ):
+        """Per-source preparation; model/geometry changes always rebuild W and nodes."""
+        if identically_zero_strength(self.strength_model):
+            return
+        c, b = coordinate_parameters, batch_parameters
+        lower, upper = c["axial_bounds_Ainv"]
+        edges = response_panel_edges(
+            lower,
+            upper,
+            self.reciprocal_basis_Ainv,
+            b["rods"],
+            b["radial_Ainv"],
+            c["ki_sample_Ainv"],
+            c["normal_sample"],
+            c["source_region_bounds"],
+        )
+        wavelength = float(self.source.mean_rays.wavelength_A[b["source_state_index"]])
+        strength_at = partial(self._regular_strength_at, rods=b["rods"], wavelength=wavelength)
+        rule = self.integration_rule
+        pixel_patch = partial(
+            self._batch_pixel_patches, density=SphericalMosaicDensity(self.mosaic)
+        )
+        # Relative indicators add over panels. Allocate absolute tolerance over
+        # all source/group/panel slots, including those with no retained events.
+        absolute_budget = rule.pixel_error_atol / (channel_count * (len(edges) - 1))
+        for left, right in pairwise(edges):
+            if cancel_requested is not None and cancel_requested():
+                raise CancelledError
+            axial = prepare_positive_axial_rule(
+                left,
+                right,
+                basis=self.reciprocal_basis_Ainv,
+                rods=b["rods"],
+                model=self.strength_model,
+                strength_at=strength_at,
+                order=rule.strength_gauss_order,
+                scalar_order=rule.strength_scalar_order,
+                scalar_phase_step_rad=rule.strength_scalar_phase_step_rad,
+            )
+            yield from iter_pixel_error_batches(
+                axial,
+                coordinate_parameters=c,
+                batch_parameters=b,
+                pixel_patch=pixel_patch,
+                absolute_budget=absolute_budget,
+                cancel_requested=cancel_requested,
+            )
 
     def _grid(self, batch: ConditionalFiberBatch) -> FiberStrengthGrid:
         wavelength = float(self.source.mean_rays.wavelength_A[batch.source_state_index])
@@ -901,92 +700,93 @@ class ConditionalStructureDetector:
             )
         return result
 
-    def compile_native_response(
-        self,
-        projection: NativePixelRegionProjection,
-        *,
-        worker_count: int = 1,
-        spatial_projection: NativeSpatialRegionProjection | None = None,
-        scattering_cache: FiberScatteringCache | None = None,
-    ) -> NativeFiberResponse:
-        """Compile probabilities with bounded parallel work and fixed reduction order."""
-        if type(worker_count) is not int or worker_count < 1:
-            raise ValueError("worker_count must be a positive integer")
-        bounds = native_projection_bounds_px(projection, self.detector_shape_rc)
-        if spatial_projection is not None and (
-            not isinstance(spatial_projection, NativeSpatialRegionProjection)
-            or spatial_projection.projection is not projection
-        ):
-            raise ValueError("spatial projection belongs to another native observation operator")
-        projector = (
-            spatial_projection
-            if spatial_projection is not None
-            else NativeSpatialRegionProjection(projection)
-        )
-        grids, nodes, probabilities, indices = [], [], [], {}
-        if len(bounds):
-            for batch, probability in _project_batches(
-                self._batches(bounds, scattering_cache=scattering_cache, include_source_mass=False),
-                projector,
-                self.spatial_quadrature_order,
-                self.gaussian_tail_radius,
-                worker_count,
-            ):
-                wavelength = float(self.source.mean_rays.wavelength_A[batch.source_state_index])
-                key = (batch.radial_Ainv, wavelength)
-                if key not in indices:
-                    indices[key] = len(grids)
-                    grids.append(self._grid(batch))
-                if not probability.nnz:
-                    continue
-                retained = np.flatnonzero(np.diff(probability.indptr))
-                nodes.append(_response_nodes(batch, indices[key], retained))
-                probabilities.append(probability[retained])
-        return NativeFiberResponse(
-            self,
-            tuple(grids),
-            tuple(nodes),
-            tuple(probabilities),
-            projection.observation_measure_px2,
-            projection.projection_revision,
-        )
-
-    def _intensity_batches(
-        self,
-        bounds: FloatArray,
-        cancel_requested: Callable[[], bool] | None = None,
-        *,
-        batch_offset: int = 0,
-    ):
-        tables = {}
-        density = SphericalMosaicDensity(self.mosaic)
-        count = 0
-        for index, batch in enumerate(self._batches(bounds, cancel_requested)):
-            count = index + 1
-            if index < batch_offset:
-                continue
+    def _batch_event_mass(self, batch, *, density, tables=None):
+        strength = batch.signed_strength_fractions
+        if strength is None:
             wavelength = float(self.source.mean_rays.wavelength_A[batch.source_state_index])
             key = (batch.radial_Ainv, wavelength)
             if key not in tables:
                 tables[key] = self._strength_table(
                     self._grid(batch), self.strength_model, self.instrument.film_thickness_A
                 )
-            mass = _event_mass(
-                _response_nodes(batch, 0),
-                tables[key],
-                density,
-                self.instrument.film_thickness_A,
-                self.intensity_envelope,
-                self.phase_population_weight * self.polarization_weight,
-                self.integration_rule.cone_quadrature_order,
+            strength = tables[key]
+        return _event_mass(
+            _response_nodes(batch, 0),
+            strength,
+            density,
+            self.instrument.film_thickness_A,
+            self.intensity_envelope,
+            self.phase_population_weight * self.polarization_weight,
+            self.integration_rule.cone_quadrature_order,
+        )
+
+    def _local_pixel_patch(self, batch, tables, density):
+        mass = self._batch_event_mass(batch, density=density, tables=tables)
+        kernels = batch.transfer.spatial
+        bounds = kernels.native_pixel_bounds(
+            self.detector_shape_rc,
+            integrated_mass=mass,
+            gaussian_tail_radius=self.gaussian_tail_radius,
+        )
+        if bounds is None:
+            return None
+        r0, r1, c0, c1 = bounds
+        value = kernels.integrate_native_pixels(
+            (r1 - r0, c1 - c0),
+            integrated_mass=mass,
+            quadrature_order=self.spatial_quadrature_order,
+            gaussian_tail_radius=self.gaussian_tail_radius,
+            row_offset=r0,
+            column_offset=c0,
+        )
+        return bounds, value
+
+    def _pixel_patches(
+        self, bounds, *, cancel_requested=None, source_state_indices=None, scattering_cache=None
+    ):
+        """Compact windows; both signs contract before one spatial projection."""
+        tables = {}
+        density = SphericalMosaicDensity(self.mosaic)
+        for batch in self._batches(
+            bounds,
+            cancel_requested,
+            source_state_indices=source_state_indices,
+            scattering_cache=scattering_cache,
+        ):
+            patch = (
+                batch.native_pixel_patch
+                if batch.signed_strength_fractions is not None
+                else self._local_pixel_patch(batch, tables, density)
             )
-            yield batch.transfer.spatial, mass
-        if batch_offset > count:
-            raise ValueError("batch_offset exceeds the declared detector event stream")
+            if patch is not None:
+                yield patch
+            batch = patch = None
+
+    def integrate_native_regions(
+        self, projection: NativePixelRegionProjection, *, scattering_cache=None
+    ):
+        """Reprepare current strength/mosaic/geometry, then project native pixel mass.
+
+        No strength-dependent axial or angular response survives this call.
+        Fractional observation coverage multiplies pixel masses exactly once.
+        """
+        bounds = native_projection_bounds_px(projection, self.detector_shape_rc)
+        result = np.zeros(projection.observation_count)
+        for patch_bounds, image in self._pixel_patches(bounds, scattering_cache=scattering_cache):
+            projection.accumulate_native_patch(result, patch_bounds, image)
+            image = None
+        return result
 
     def density_at(self, column_px: ArrayLike, row_px: ArrayLike) -> FloatArray:
+        """Evaluate continuous A2/px2 density through the sole prepared event stream.
+
+        The native-pixel angular indicator does not qualify this distinct pointwise
+        observable; callers must assess continuous-region quadrature separately.
+        """
+        reject_complex(column_px, "column_px")
+        reject_complex(row_px, "row_px")
         column, row = np.broadcast_arrays(
-            np.asarray(column_px, dtype=float), np.asarray(row_px, dtype=float)
+            np.asarray(column_px, dtype=np.float64), np.asarray(row_px, dtype=np.float64)
         )
         if np.any(~np.isfinite(column)) or np.any(~np.isfinite(row)):
             raise ValueError("detector coordinates must be finite")
@@ -996,94 +796,71 @@ class ConditionalStructureDetector:
         bounds = np.array(
             [[column.min() - 0.5, column.max() + 0.5, row.min() - 0.5, row.max() + 0.5]]
         )
-        for kernels, mass in self._intensity_batches(bounds):
-            result += kernels.density_at(column, row, integrated_mass=mass)
+        tables, density = {}, SphericalMosaicDensity(self.mosaic)
+        for batch in self._batches(bounds):
+            mass = self._batch_event_mass(batch, density=density, tables=tables)
+            result += batch.transfer.spatial.density_at(column, row, integrated_mass=mass)
+            batch = mass = None
         return result
 
-    def integrate_native_pixels(self, *, row_bounds: tuple[int, int] | None = None) -> FloatArray:
-        """Sum the whole-panel event stream, optionally depositing only declared rows."""
-        shape = (
-            self.detector_shape_rc
-            if row_bounds is None
-            else (row_bounds[1] - row_bounds[0], self.detector_shape_rc[1])
-        )
-        image = np.zeros(shape)
-        for contribution in self.iter_native_pixel_batches(row_bounds=row_bounds):
-            image += contribution
-        return image
+    def iter_native_pixel_patches(self, *, batch_offset=0, bin_size_px=1):
+        """Yield compact (cell bounds, mass) windows in deterministic checkpoint order.
 
-    def iter_native_pixel_batches(
-        self,
-        *,
-        row_bounds: tuple[int, int] | None = None,
-        batch_offset: int = 0,
-        bin_size_px: int = 1,
-    ):
-        """Integrate native rectangles; binning changes cells, never samples an image."""
+        Bounds index the output cells (native pixels when bin_size_px is one).
+        Bins sum native pixel masses; callers own the accumulated image. Resuming
+        reprepares the same candidate stream and skips already accumulated windows.
+        """
         rows, columns = self.detector_shape_rc
         if type(batch_offset) is not int or batch_offset < 0:
             raise ValueError("batch_offset must be a nonnegative integer")
-        first, stop = (0, rows) if row_bounds is None else row_bounds
-        if type(first) is not int or type(stop) is not int or not 0 <= first < stop <= rows:
-            raise ValueError("row_bounds must identify ordered native detector rows")
         if (
             type(bin_size_px) is not int
             or bin_size_px < 1
-            or any(value % bin_size_px for value in (first, stop, columns))
+            or rows % bin_size_px
+            or columns % bin_size_px
         ):
-            raise ValueError("bin size must exactly divide detector columns and row bounds")
-        shape = (stop - first) // bin_size_px, columns // bin_size_px
+            raise ValueError("bin size must exactly divide the native detector")
         bounds = np.array([[-0.5, columns - 0.5, -0.5, rows - 0.5]])
-        for kernels, mass in self._intensity_batches(bounds, batch_offset=batch_offset):
-            if bin_size_px != 1:
-                kernels = replace(
-                    kernels,
-                    mean_px=(kernels.mean_px + 0.5) / bin_size_px - 0.5,
-                    factor_px=kernels.factor_px / bin_size_px,
-                )
-            yield kernels.integrate_native_pixels(
-                shape,
-                integrated_mass=mass,
-                quadrature_order=self.spatial_quadrature_order,
-                gaussian_tail_radius=self.gaussian_tail_radius,
-                row_offset=first // bin_size_px,
-            )
-
-    def sample_native_pixel_mass(
-        self,
-        *,
-        draws_per_batch: int,
-        seed: int,
-        draw_offset: int = 0,
-        cancel_requested: Callable[[], bool] | None = None,
-    ) -> FloatArray:
-        """Monte Carlo kernel selection, with continuous beam position integrated."""
-        if type(draws_per_batch) is not int or draws_per_batch <= 0:
-            raise ValueError("draws_per_batch must be positive")
-        if type(draw_offset) is not int or draw_offset < 0 or type(seed) is not int or seed < 0:
-            raise ValueError("draw offset and seed must be nonnegative integers")
-        if cancel_requested is not None and cancel_requested():
-            raise CancelledError
-        rows, columns = self.detector_shape_rc
-        image = np.zeros((rows, columns))
-        bounds = np.array([[-0.5, columns - 0.5, -0.5, rows - 0.5]])
-        for batch_index, (kernels, mass) in enumerate(
-            self._intensity_batches(bounds, cancel_requested)
-        ):
-            if cancel_requested is not None and cancel_requested():
-                raise CancelledError
-            if mass.sum() <= 0:
+        count = 0
+        for patch in self._pixel_patches(bounds):
+            count += 1
+            if count <= batch_offset:
+                patch = None
                 continue
-            rng = np.random.default_rng(np.random.SeedSequence([seed, batch_index]))
-            rng.random(draw_offset)
-            image += kernels.sample_native_pixel_mass(
-                draws_per_batch,
-                self.detector_shape_rc,
-                integrated_mass=mass,
-                rng=rng,
-                quadrature_order=self.spatial_quadrature_order,
-                gaussian_tail_radius=self.gaussian_tail_radius,
-            )
-        if cancel_requested is not None and cancel_requested():
-            raise CancelledError
+            if bin_size_px == 1:
+                yield patch
+            else:
+                (r0, r1, c0, c1), value = patch
+                a, b, c, d = (
+                    r0 // bin_size_px,
+                    (r1 + bin_size_px - 1) // bin_size_px,
+                    c0 // bin_size_px,
+                    (c1 + bin_size_px - 1) // bin_size_px,
+                )
+                padded = np.zeros(((b - a) * bin_size_px, (d - c) * bin_size_px))
+                padded[
+                    r0 - a * bin_size_px : r1 - a * bin_size_px,
+                    c0 - c * bin_size_px : c1 - c * bin_size_px,
+                ] = value
+                yield (
+                    (a, b, c, d),
+                    padded.reshape(b - a, bin_size_px, d - c, bin_size_px).sum(axis=(1, 3)),
+                )
+                value = padded = None
+            patch = None
+        if batch_offset > count:
+            raise ValueError("batch_offset exceeds completed native windows")
+
+    def integrate_native_pixels(self, *, row_bounds=None):
+        """Accumulate compact accepted windows in one caller-owned native image."""
+        rows, columns = self.detector_shape_rc
+        first, stop = (0, rows) if row_bounds is None else row_bounds
+        if type(first) is not int or type(stop) is not int or not 0 <= first < stop <= rows:
+            raise ValueError("row_bounds must identify ordered native detector rows")
+        image = np.zeros((stop - first, columns))
+        for (r0, r1, c0, c1), value in self.iter_native_pixel_patches():
+            a, b = max(first, r0), min(stop, r1)
+            if a < b:
+                image[a - first : b - first, c0:c1] += value[a - r0 : b - r0]
+            value = None
         return image

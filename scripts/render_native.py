@@ -252,7 +252,7 @@ def render(
     if profile_projection is not None and "display_profile_count" not in arrays:
         arrays["display_profile_count"] = sum(
             (
-                scale * detector.compile_native_response(profile_projection).evaluate()
+                scale * detector.integrate_native_regions(profile_projection)
                 for detector in detectors
             ),
             np.zeros(profile_projection.observation_count),
@@ -264,10 +264,12 @@ def render(
                 continue
             first = manifest["partition_completed_batches"][part]
             for i, contribution in enumerate(
-                detector.iter_native_pixel_batches(batch_offset=first, bin_size_px=bin_size_px),
+                detector.iter_native_pixel_patches(batch_offset=first, bin_size_px=bin_size_px),
                 start=first,
             ):
-                arrays[image_key] += scale * contribution
+                (r0, r1, c0, c1), value = contribution
+                arrays[image_key][r0:r1, c0:c1] += scale * value
+                contribution = value = None
                 manifest["completed_batches"] += 1
                 manifest["partition_completed_batches"][part] = i + 1
                 if perf_counter() - last_checkpoint >= checkpoint_seconds:

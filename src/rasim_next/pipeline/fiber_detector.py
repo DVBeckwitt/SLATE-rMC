@@ -20,7 +20,7 @@ from scipy.special import roots_legendre
 from scipy.stats import qmc
 
 from painted_ewald import MosaicParameters, Rod
-from painted_ewald.validation import proper_rotation, reciprocal_basis
+from painted_ewald.validation import proper_rotation, reciprocal_basis, reject_complex
 from rasim_next.core.contracts import MaterialOptics, canonical_revision_sha256
 from rasim_next.core.scattering import polarization_model_code, scattering_polarization_weight
 from rasim_next.core.validity import ValidityCode
@@ -992,134 +992,6 @@ def _angular_intervals(q, bounds):
     return lo[:merged], hi[:merged]
 
 
-def seed_angular_panel_edges(
-    source_region_bounds: ArrayLike, *, maximum_panel_width_rad: float, maximum_panels: int
-) -> tuple[float, ...]:
-    """Seed a fixed physical-angle partition from complete native geometry bounds.
-
-    Supply the union of bounds over every required observation/source/probe.
-    All geometry endpoints remain knots, including boundaries inside overlapping
-    support arcs. Gaps outside those arcs remain panels, not omitted support.
-    The width cap is an explicit accuracy control, not a convergence certificate.
-    """
-    bounds = np.asarray(source_region_bounds)
-    width = maximum_panel_width_rad
-    if (
-        bounds.ndim != 2
-        or bounds.shape[1] != 4
-        or np.iscomplexobj(bounds)
-        or np.any(~np.isfinite(bounds))
-        or np.any(bounds[:, 0] < 0)
-        or np.any(bounds[:, 3] < 0)
-        or np.any(bounds[:, 3] > 2 * np.pi)
-        or np.ndim(width) != 0
-        or np.iscomplexobj(width)
-        or not np.isfinite(width)
-        or width <= 0
-        or type(maximum_panels) is not int
-        or maximum_panels < 1
-    ):
-        raise ValueError(
-            "angular seeding requires finite geometry, positive width and panel budget"
-        )
-    bounds = bounds[(bounds[:, 1] >= bounds[:, 0]) & (bounds[:, 3] > 0)].astype(float)
-    bounds[:, :2] = [0.0, 1.0]
-    start = bounds[:, 2] % (2 * np.pi)
-    stop = start + bounds[:, 3]
-    cuts = np.unique(
-        np.r_[
-            0.0, 2 * np.pi, start, np.minimum(stop, 2 * np.pi), stop[stop > 2 * np.pi] - 2 * np.pi
-        ]
-    )
-    lo, hi = _angular_intervals(0.0, bounds)
-    lengths = np.diff(cuts)
-    midpoint = cuts[:-1] + lengths / 2
-    inside = np.zeros(len(midpoint), dtype=bool)
-    for left, right in zip(lo, hi, strict=True):
-        inside |= (midpoint >= left) & (midpoint <= right)
-    counts = np.maximum(1.0, np.where(inside, np.ceil(lengths / width), 1.0))
-    if np.sum(counts) > maximum_panels:
-        raise ValueError("angular panel budget exceeded; no mesh or accuracy fallback returned")
-    edges = np.r_[
-        np.concatenate(
-            [
-                np.linspace(left, right, int(count) + 1)[:-1]
-                for left, right, count in zip(cuts[:-1], cuts[1:], counts, strict=True)
-            ]
-        ),
-        2 * np.pi,
-    ]
-    if np.any(np.diff(edges) <= 0):
-        raise ValueError("requested angular panel width is below floating-point resolution")
-    return tuple(edges)
-
-
-def _validated_angular_edges(edges, quadrature_kind):
-    if edges is None:
-        return None
-    value = np.asarray(edges)
-    if (
-        quadrature_kind != "composite_gauss"
-        or np.iscomplexobj(value)
-        or value.ndim != 1
-        or len(value) < 2
-        or np.any(~np.isfinite(value))
-        or value[0] != 0
-        or value[-1] != 2 * np.pi
-        or np.any(np.diff(value) <= 0)
-    ):
-        raise ValueError(
-            "angular panels require increasing finite [0,2*pi] edges and composite_gauss"
-        )
-    return np.asarray(value, dtype=float)
-
-
-@numba.njit(nogil=True)
-def _angular_panel_node_count(q, bounds, edges, order, maximum_nodes):
-    count = 0
-    for coordinate in q:
-        lo, hi = _angular_intervals(coordinate, bounds)
-        for j in range(len(lo)):
-            left, right = lo[j], hi[j]
-            count += (
-                np.searchsorted(edges, right, side="left")
-                - np.searchsorted(edges, left, side="right")
-                + 1
-            ) * order
-            if count > maximum_nodes:
-                raise ValueError("angular panel node budget exceeded before allocation")
-    return count
-
-
-@numba.njit(nogil=True)
-def _physical_angular_panel_blocks(q, bounds, edges, nodes, weights, batch_size):
-    axial_index = np.empty(batch_size, dtype=np.int64)
-    phi, mass = np.empty(batch_size), np.empty(batch_size)
-    count = 0
-    for i, coordinate in enumerate(q):
-        lo, hi = _angular_intervals(coordinate, bounds)
-        for arc in range(len(lo)):
-            left, right = lo[arc], hi[arc]
-            first = np.searchsorted(edges, left, side="right")
-            stop = np.searchsorted(edges, right, side="left")
-            for j in range(first, stop + 1):
-                end = right if j == stop else edges[j]
-                half = (end - left) / 2
-                for k in range(len(nodes)):
-                    axial_index[count] = i
-                    phi[count] = left + half * (nodes[k] + 1)
-                    mass[count] = half * weights[k]
-                    count += 1
-                    if count == batch_size:
-                        yield axial_index, phi, mass
-                        axial_index = np.empty(batch_size, dtype=np.int64)
-                        phi, mass = np.empty(batch_size), np.empty(batch_size)
-                        count = 0
-                left = end
-    if count:
-        yield axial_index[:count], phi[:count], mass[:count]
-
-
 @numba.njit(nogil=True)
 def _angular_inverse_cdf(target, left, right, centers, widths, offsets, uniform_mass, fraction):
     value = left + (right - left) * fraction
@@ -1139,80 +1011,6 @@ def _angular_inverse_cdf(target, left, right, centers, widths, offsets, uniform_
     raise ValueError("angular inverse CDF did not converge within its iteration budget")
 
 
-@numba.njit(nogil=True)
-def _bounded_angular_quantiles(
-    quantiles, q, bounds, centers, widths, split_arcs=False, uniform_mass=0.2
-):
-    """Condition the complete proposal on the conservative reachable arc union.
-
-    Empty-support axial rows retain their attempted quadrature count with zero
-    contribution. The returned PDF includes the union probability normalization.
-    """
-    axial_indices = []
-    angular_indices = []
-    angles = []
-    densities = []
-    fractions = []
-    for i in range(len(q)):
-        lo, hi = _angular_intervals(q[i], bounds)
-        merged = len(lo)
-        if merged == 0:
-            continue
-        offsets = np.empty(centers.shape[1])
-        for j in range(len(offsets)):
-            offsets[j] = _wrapped_cauchy_cdf(-centers[i, j], widths[i, j])
-        base = np.empty(merged)
-        mass = np.empty(merged)
-        total = 0.0
-        for j in range(merged):
-            base[j] = _angular_cdf_density(lo[j], centers[i], widths[i], offsets, uniform_mass)[0]
-            mass[j] = (
-                _angular_cdf_density(hi[j], centers[i], widths[i], offsets, uniform_mass)[0]
-                - base[j]
-            )
-            total += mass[j]
-        if total <= 0:
-            raise ArithmeticError("Nonpositive reachable angular proposal mass")
-        for j in range(quantiles.shape[1]):
-            for arc in range(merged if split_arcs else 1):
-                if split_arcs:
-                    interval = arc
-                    target = quantiles[i, j] * mass[interval]
-                    fraction = mass[interval] / total
-                else:
-                    target = quantiles[i, j] * total
-                    interval = 0
-                    while interval < merged - 1 and target > mass[interval]:
-                        target -= mass[interval]
-                        interval += 1
-                    fraction = 1.0
-                if mass[interval] <= 0:
-                    continue
-                v, density = _angular_inverse_cdf(
-                    target + base[interval],
-                    lo[interval],
-                    hi[interval],
-                    centers[i],
-                    widths[i],
-                    offsets,
-                    uniform_mass,
-                    quantiles[i, j],
-                )
-                axial_indices.append(i)
-                angular_indices.append(j)
-                angles.append(v)
-                densities.append(density / total)
-                fractions.append(fraction)
-    return (
-        np.array(axial_indices),
-        np.array(angular_indices),
-        np.array(angles),
-        np.array(densities),
-        np.array(fractions),
-    )
-
-
-@numba.njit(nogil=True)
 def _resolved_angular_cdf_panels(
     q, bounds, centers, widths, power, maximum_width, regions, maximum_nodes, k
 ):
@@ -1369,544 +1167,240 @@ class FiberQuadratureNodes:
     """Shared exact axial nodes and source-specific joint integration coordinates.
 
     ``weight_Ainv_rad`` integrates the positive axial coordinate and Ewald azimuth.
+    Alternatively strength_weighted_mass integrates W du dphi and requires
+    canonical signed_strength_fractions=S/W; ordinary weights must then be None.
     Empty geometric support contributes zero while retaining the original number
-    of attempted nodes. No SF, mosaic density, optical or source mass is included.
+    of attempted nodes. Mosaic, optical and source factors are never included.
     """
 
     positive_axial_Ainv: NDArray[np.float64]
     axial_index: NDArray[np.int64]
     ewald_azimuth_rad: NDArray[np.float64]
-    weight_Ainv_rad: NDArray[np.float64]
+    weight_Ainv_rad: NDArray[np.float64] | None
+    strength_weighted_mass: NDArray[np.float64] | None = None
+    signed_strength_fractions: NDArray[np.float64] | None = None
 
     def __post_init__(self) -> None:
         index = np.asarray(self.axial_index)
         if index.dtype.kind not in "iu":
             raise TypeError("axial_index must contain integers")
-        for name in ("positive_axial_Ainv", "axial_index", "ewald_azimuth_rad", "weight_Ainv_rad"):
+        weighted = self.strength_weighted_mass is not None
+        if weighted == (self.weight_Ainv_rad is not None):
+            raise ValueError("declare exactly one ordinary du or strength-weighted W du measure")
+        if weighted != (self.signed_strength_fractions is not None):
+            raise ValueError("strength-weighted nodes require canonical signed fractions")
+        for name in (
+            "positive_axial_Ainv",
+            "axial_index",
+            "ewald_azimuth_rad",
+            "weight_Ainv_rad",
+            "strength_weighted_mass",
+            "signed_strength_fractions",
+        ):
+            if getattr(self, name) is None:
+                continue
+            reject_complex(getattr(self, name), name)
             dtype = np.int64 if name == "axial_index" else np.float64
             value = np.array(getattr(self, name), dtype=dtype, copy=True)
-            if value.ndim != 1 or np.any(~np.isfinite(value)) or np.any(value < 0):
+            dimensions = 2 if name == "signed_strength_fractions" else 1
+            if value.ndim != dimensions or np.any(~np.isfinite(value)) or np.any(value < 0):
                 raise ValueError("quadrature arrays must be finite nonnegative vectors")
             value.setflags(write=False)
             object.__setattr__(self, name, value)
+        mass = self.strength_weighted_mass if weighted else self.weight_Ainv_rad
         if (
             self.ewald_azimuth_rad.shape != self.axial_index.shape
-            or self.weight_Ainv_rad.shape != self.axial_index.shape
+            or mass.shape != self.axial_index.shape
             or np.any(self.axial_index >= len(self.positive_axial_Ainv))
             or np.any(self.ewald_azimuth_rad > 2 * np.pi)
-            or np.any(self.weight_Ainv_rad <= 0)
+            or np.any(mass <= 0)
         ):
             raise ValueError(
                 "retained quadrature indices, azimuths and positive weights must align"
             )
+        if weighted and (
+            self.signed_strength_fractions.shape != (2, len(self.positive_axial_Ainv))
+            or not np.allclose(self.signed_strength_fractions.sum(axis=0), 1, rtol=0, atol=5e-15)
+        ):
+            raise ValueError("canonical signed fractions must align and sum to one")
 
 
-def iter_conditional_fiber_coordinates(
+def iter_local_m0_coordinates(
     *,
-    axial_bounds_Ainv: tuple[float, float],
-    axial_peak_centers_Ainv: ArrayLike,
-    axial_peak_half_width_Ainv: float,
-    radial_Ainv: float,
-    ki_sample_Ainv: ArrayLike,
-    normal_sample: ArrayLike,
-    source_region_bounds: ArrayLike,
-    reference_mosaic: MosaicParameters,
-    axial_power: int,
-    angular_power: int,
-    axial_seed: int,
-    angular_shift_seed: int,
-    quadrature_kind: str = "sobol",
-    maximum_axial_panel_width_Ainv: float | None = None,
-    angular_support: str = "q_conditioned_union",
-    axial_panel_edges_Ainv: ArrayLike | None = None,
-    angular_panel_edges_rad: ArrayLike | None = None,
-    maximum_angular_panel_nodes: int = 4194304,
-    maximum_angular_panel_width_rad: float | None = None,
-    angular_resolution_regions: ArrayLike | None = None,
-    batch_size: int = 16384,
-) -> Iterator[FiberQuadratureNodes]:
-    """Stream joint rod/Ewald coordinates with absolute physical weights.
+    axial_bounds_Ainv,
+    axial_peak_centers_Ainv,
+    axial_peak_half_width_Ainv,
+    radial_Ainv,
+    ki_sample_Ainv,
+    normal_sample,
+    source_region_bounds,
+    reference_mosaic,
+    axial_power,
+    angular_power,
+    axial_seed,
+    angular_resolution_regions,
+    maximum_angular_panel_nodes,
+    batch_size,
+):
+    """Existing local-lamella endpoint measure, confined to the zero rod.
 
-    Proposal centers and widths improve efficiency only; their complete normalized
-    mixture probabilities are removed by the returned weights. Bounds come from
-    ``conditional_ewald_region_bounds`` with its explicit source-tail budget.
-    Reuse axial bounds and seed across source rows to share exact SF evaluations.
-    Native callers supply local resolution regions and receive conditional GL8
-    angular integration, retaining the shared Sobol or composite-Gauss axial grid.
-    Each region is [Qlow,Qhigh,angle_start,angle_width,width_at_max_transverse]. Its
-    width is defined at the region's maximum physical Ewald-circle radius and
-    scales inversely with the actual radius at each axial node. The scalar cap
-    remains a literal angular width. Zero circle radius removes only the local
-    geometry cap, retaining the angular measure and proposal panels. A region's
-    cap only resolves geometry; it never changes integration support. Explicit
-    angle edges use physical Gauss weights instead. With neither control, the
-    low-level reference retains its paired 2-D Sobol/composite proposal rule.
+    This channel integrates external Q, with no fabricated q=0 response. Its
+    full-support Sobol axial proposal and native-resolution GL8 angular panels
+    remain independent of the regular strength-weighted internal phase chart.
     """
-    if type(batch_size) is not int or batch_size < 1:
-        raise ValueError("batch_size must be a positive integer")
-    if not isinstance(reference_mosaic, MosaicParameters):
-        raise TypeError("reference_mosaic must be MosaicParameters")
-    if angular_support not in {"q_conditioned_union", "fixed_union"}:
-        raise ValueError("angular support must be q_conditioned_union or fixed_union")
-    angular_edges = _validated_angular_edges(angular_panel_edges_rad, quadrature_kind)
-    angular_cap = maximum_angular_panel_width_rad
-    if angular_cap is not None and (
-        np.ndim(angular_cap) != 0
-        or np.iscomplexobj(angular_cap)
-        or not np.isfinite(angular_cap)
-        or angular_cap <= 0
-        or angular_edges is not None
-    ):
-        raise ValueError("angular width must be positive and cannot accompany explicit edges")
-    regions = (
-        np.empty((0, 5))
-        if angular_resolution_regions is None
-        else np.asarray(angular_resolution_regions)
+    if radial_Ainv != 0:
+        raise ValueError("the local-m0 endpoint integrator requires radius zero")
+    lower, upper = axial_bounds_Ainv
+    unit = qmc.Sobol(2, scramble=True, seed=axial_seed).random_base2(axial_power)
+    axial, pdf = _axial_mixture_quantiles(
+        unit[:, 0],
+        lower,
+        upper,
+        np.asarray(axial_peak_centers_Ainv),
+        axial_peak_half_width_Ainv,
+        np.ones(len(axial_peak_centers_Ainv)),
     )
-    if (
-        regions.ndim != 2
-        or regions.shape[1] != 5
-        or np.iscomplexobj(regions)
-        or np.any(~np.isfinite(regions))
-        or np.any(regions[:, 0] < 0)
-        or np.any(regions[:, 1] < regions[:, 0])
-        or np.any((regions[:, 3] < 0) | (regions[:, 3] > 2 * np.pi))
-        or np.any(regions[:, 4] <= 0)
-        or (angular_edges is not None and angular_resolution_regions is not None)
-    ):
-        raise ValueError(
-            "angular resolution regions require finite Q/angle bounds and positive widths"
-        )
-    regions = np.asarray(regions, dtype=float)
-    resolved_angles = (
-        angular_edges is not None
-        or angular_cap is not None
-        or angular_resolution_regions is not None
-    )
-    if type(maximum_angular_panel_nodes) is not int or maximum_angular_panel_nodes < 1:
-        raise ValueError("angular panel node budget must be a positive integer")
-    lower, upper = map(float, axial_bounds_Ainv)
-    centers = np.asarray(axial_peak_centers_Ainv, dtype=np.float64)
-    width, radius = float(axial_peak_half_width_Ainv), float(radial_Ainv)
-    ki, normal = (
-        np.asarray(ki_sample_Ainv, dtype=np.float64),
-        np.asarray(normal_sample, dtype=np.float64),
-    )
-    bounds = np.asarray(source_region_bounds, dtype=np.float64)
-    if (
-        not np.all(np.isfinite([lower, upper, width, radius]))
-        or lower < 0
-        or upper <= lower
-        or width <= 0
-        or radius < 0
-        or centers.ndim != 1
-        or not len(centers)
-        or np.any(~np.isfinite(centers))
-        or ki.shape != (3,)
-        or np.any(~np.isfinite(ki))
-        or np.linalg.norm(ki) == 0
-        or normal.shape != (3,)
-        or np.any(~np.isfinite(normal))
-        or not np.isclose(np.linalg.norm(normal), 1.0, rtol=0, atol=1e-12)
-        or bounds.ndim != 2
-        or bounds.shape[1] != 4
-        or np.any(~np.isfinite(bounds))
-        or np.any(bounds[:, 0] < 0)
-        or np.any(bounds[:, 1] < bounds[:, 0])
-        or np.any((bounds[:, 3] < 0) | (bounds[:, 3] > 2 * np.pi))
-    ):
-        raise ValueError(
-            "finite ordered axial bounds, positive proposal width and valid Ewald bounds required"
-        )
-    for value in (axial_power, angular_power, axial_seed, angular_shift_seed):
-        if type(value) is not int or value < 0:
-            raise ValueError("quadrature powers and seeds must be nonnegative integers")
-    if resolved_angles and 2**angular_power > maximum_angular_panel_nodes:
-        raise ValueError("angular panel node budget exceeded by per-panel order")
-    if maximum_axial_panel_width_Ainv is not None and (
-        quadrature_kind != "composite_gauss"
-        or np.ndim(maximum_axial_panel_width_Ainv) != 0
-        or np.iscomplexobj(maximum_axial_panel_width_Ainv)
-        or not np.isfinite(maximum_axial_panel_width_Ainv)
-        or maximum_axial_panel_width_Ainv <= 0
-    ):
-        raise ValueError("a finite positive axial panel width requires composite_gauss")
-    if axial_panel_edges_Ainv is not None:
-        supplied = np.asarray(axial_panel_edges_Ainv)
-        if (
-            quadrature_kind != "composite_gauss"
-            or np.iscomplexobj(supplied)
-            or supplied.ndim != 1
-            or len(supplied) < 2
-            or np.any(~np.isfinite(supplied))
-            or np.any(np.diff(supplied) <= 0)
-            or supplied[0] < 0
-            or supplied[0] != lower
-            or supplied[-1] != upper
-        ):
-            raise ValueError(
-                "physical axial panels must enclose exactly the domain and require composite_gauss"
-            )
-        if maximum_axial_panel_width_Ainv is not None:
-            raise ValueError("explicit axial panels cannot also request a panel-width cap")
-        edges = np.asarray(supplied, dtype=float)
-        axial_nodes, axial_weights = roots_legendre(2 ** min(axial_power, 3))
-        half = np.diff(edges) / 2
-        axial = (edges[:-1, None] + half[:, None] * (axial_nodes + 1)).ravel()
-        axial_pdf = np.ones(len(axial))
-        if resolved_angles:
-            axial_mass = (half[:, None] * axial_weights).ravel()
-        else:
-            angular_nodes, angular_weights = roots_legendre(2**angular_power)
-            angular_quantiles = np.broadcast_to(
-                (angular_nodes + 1) / 2, (len(axial), len(angular_nodes))
-            ).copy()
-            probability_weights = (
-                (half[:, None] * axial_weights).ravel()[:, None] * angular_weights / 2
-            )
-    elif quadrature_kind == "sobol":
-        unit = qmc.Sobol(2, scramble=True, seed=axial_seed).random_base2(axial_power)
-        axial_quantiles = unit[:, 0]
-        if resolved_angles:
-            axial_mass = np.full(len(unit), 1 / len(unit))
-        else:
-            shift = unit[:, 1] + np.random.default_rng(angular_shift_seed).random()
-            angular_count = 2**angular_power
-            angular_quantiles = (
-                shift[:, None] + (np.arange(angular_count) + 0.5) / angular_count
-            ) % 1
-            probability_weights = np.full(angular_quantiles.shape, 1 / (len(unit) * angular_count))
-    elif quadrature_kind == "composite_gauss":
-        order = 2 ** min(axial_power, 3)
-        panels = 2**axial_power // order
-        axial_nodes, axial_weights = roots_legendre(order)
-        edges = np.linspace(0.0, 1.0, panels + 1)
-        if maximum_axial_panel_width_Ainv is not None:
-            while True:
-                physical_edges, _ = _axial_mixture_quantiles(
-                    edges, lower, upper, centers, width, np.ones(len(centers))
-                )
-                split = np.diff(physical_edges) > maximum_axial_panel_width_Ainv
-                if not np.any(split):
-                    break
-                middle = (edges[:-1][split] + edges[1:][split]) / 2
-                if np.any((middle <= edges[:-1][split]) | (middle >= edges[1:][split])):
-                    raise ValueError(
-                        "requested axial panel width is below floating-point resolution"
-                    )
-                edges = np.sort(np.concatenate((edges, middle)))
-        panel_mass = np.diff(edges)
-        axial_quantiles = (edges[:-1, None] + panel_mass[:, None] * (axial_nodes + 1) / 2).ravel()
-        axial_weights = (panel_mass[:, None] * axial_weights).ravel()
-        if resolved_angles:
-            axial_mass = axial_weights / 2
-        else:
-            angular_nodes, angular_weights = roots_legendre(2**angular_power)
-            angular_count = len(angular_nodes)
-            angular_quantiles = np.broadcast_to(
-                (angular_nodes + 1) / 2, (len(axial_quantiles), angular_count)
-            ).copy()
-            probability_weights = axial_weights[:, None] * angular_weights[None, :] / 4
-    else:
-        raise ValueError("quadrature kind must be sobol or composite_gauss")
-    if axial_panel_edges_Ainv is None:
-        axial, axial_pdf = _axial_mixture_quantiles(
-            axial_quantiles, lower, upper, centers, width, np.ones(len(centers))
-        )
-    if angular_support == "fixed_union" and len(bounds):
-        # Preserve one conservative angular union throughout the source's Q range.
-        # Activating an observation must not remesh another observation's integral.
-        bounds = bounds.copy()
-        bounds[:, 0] = np.min(bounds[:, 0])
-        bounds[:, 1] = np.max(bounds[:, 1])
-    if angular_edges is not None:
-        q = np.hypot(radius, axial)
-        count = _angular_panel_node_count(
-            q, bounds, angular_edges, 2**angular_power, maximum_angular_panel_nodes
-        )
-        if count == 0:
-            yield FiberQuadratureNodes(axial, np.empty(0, dtype=np.int64), np.empty(0), np.empty(0))
-            return
-        angular_nodes, angular_weights = roots_legendre(2**angular_power)
-        axial_mass = axial_mass / axial_pdf
-        for index, phi, angular_mass in _physical_angular_panel_blocks(
-            q,
-            bounds,
-            angular_edges,
-            angular_nodes,
-            angular_weights,
-            min(batch_size, count),
-        ):
-            yield FiberQuadratureNodes(axial, index, phi, axial_mass[index] * angular_mass)
-        return
-    angular_centers, angular_widths = _angular_proposal_parameters(
+    mass = 1 / (len(axial) * pdf)
+    centers, widths = _angular_proposal_parameters(
         axial,
-        radius,
-        ki,
-        normal,
+        0,
+        ki_sample_Ainv,
+        normal_sample,
         reference_mosaic.gaussian_sigma_rad,
         reference_mosaic.lorentzian_half_width_rad,
     )
-    if angular_cap is not None or angular_resolution_regions is not None:
-        panels = _resolved_angular_cdf_panels(
-            np.hypot(radius, axial),
-            bounds,
-            angular_centers,
-            angular_widths,
-            angular_power,
-            2 * np.pi if angular_cap is None else angular_cap,
-            regions,
-            maximum_angular_panel_nodes,
-            np.linalg.norm(ki),
-        )
-        order = 8
-        count = len(panels[0]) * order
-        if not count:
-            yield FiberQuadratureNodes(axial, np.empty(0, dtype=np.int64), np.empty(0), np.empty(0))
-            return
-        angular_nodes, angular_weights = roots_legendre(order)
-        axial_mass = axial_mass / axial_pdf
-        for index, phi, angular_mass in _angular_cdf_panel_blocks(
-            panels,
-            angular_centers,
-            angular_widths,
-            angular_nodes,
-            angular_weights,
-            min(batch_size, count),
-        ):
-            yield FiberQuadratureNodes(axial, index, phi, axial_mass[index] * angular_mass)
+    panels = _resolved_angular_cdf_panels(
+        axial,
+        np.asarray(source_region_bounds),
+        centers,
+        widths,
+        angular_power,
+        2 * np.pi,
+        np.asarray(angular_resolution_regions),
+        maximum_angular_panel_nodes,
+        np.linalg.norm(ki_sample_Ainv),
+    )
+    count = len(panels[0]) * 8
+    if not count:
         return
-    axial_index, angular_index, azimuth, angular_pdf, fractions = _bounded_angular_quantiles(
-        angular_quantiles,
-        np.hypot(radius, axial),
-        bounds,
-        angular_centers,
-        angular_widths,
-        quadrature_kind == "composite_gauss",
-    )
-    weights = (
-        probability_weights[axial_index, angular_index]
-        * fractions
-        / (axial_pdf[axial_index] * angular_pdf)
-    )
-    if not len(axial_index):
-        yield FiberQuadratureNodes(axial, axial_index, azimuth, weights)
-    for first in range(0, len(axial_index), batch_size):
-        stop = first + batch_size
-        yield FiberQuadratureNodes(
-            axial, axial_index[first:stop], azimuth[first:stop], weights[first:stop]
-        )
-
-
-def sample_conditional_fiber_coordinates(
-    *,
-    axial_bounds_Ainv: tuple[float, float],
-    axial_peak_centers_Ainv: ArrayLike,
-    axial_peak_half_width_Ainv: float,
-    radial_Ainv: float,
-    ki_sample_Ainv: ArrayLike,
-    normal_sample: ArrayLike,
-    source_region_bounds: ArrayLike,
-    reference_mosaic: MosaicParameters,
-    axial_power: int,
-    angular_power: int,
-    axial_seed: int,
-    angular_shift_seed: int,
-    quadrature_kind: str = "sobol",
-    maximum_axial_panel_width_Ainv: float | None = None,
-    angular_support: str = "q_conditioned_union",
-    axial_panel_edges_Ainv: ArrayLike | None = None,
-    angular_panel_edges_rad: ArrayLike | None = None,
-    maximum_angular_panel_nodes: int = 4194304,
-    maximum_angular_panel_width_rad: float | None = None,
-    angular_resolution_regions: ArrayLike | None = None,
-) -> FiberQuadratureNodes:
-    """Materialize the shared coordinate stream for bounded independent proof work."""
-    blocks = list(iter_conditional_fiber_coordinates(**locals()))
-    return FiberQuadratureNodes(
-        blocks[0].positive_axial_Ainv,
-        np.concatenate([block.axial_index for block in blocks]),
-        np.concatenate([block.ewald_azimuth_rad for block in blocks]),
-        np.concatenate([block.weight_Ainv_rad for block in blocks]),
-    )
-
-
-@dataclass(frozen=True, slots=True)
-class AxialPanelMesh:
-    """Fixed physical panels for an explicit complete radial rod group.
-
-    Local-lamella m0 uses external |Q|; regular rods use positive internal
-    axial momentum. The mesh never declares intensity or detector symmetry.
-    """
-
-    rods_hk: tuple[tuple[int, int], ...]
-    coordinate: str
-    edges_Ainv: tuple[float, ...]
-
-    def __post_init__(self):
-        rods = tuple(sorted(tuple(row) for row in self.rods_hk))
-        if (
-            not rods
-            or len(set(rods)) != len(rods)
-            or any(len(row) != 2 or any(type(v) is not int for v in row) for row in rods)
-        ):
-            raise ValueError("axial mesh requires unique integer (h,k) rods")
-        if self.coordinate not in {"positive_phase_axial", "external_local_m0_q"}:
-            raise ValueError("axial mesh coordinate must name its physical measure")
-        if self.coordinate == "external_local_m0_q" and rods != ((0, 0),):
-            raise ValueError("external local-m0 mesh requires only the zero rod")
-        supplied = np.asarray(self.edges_Ainv)
-        if (
-            np.iscomplexobj(supplied)
-            or supplied.ndim != 1
-            or len(supplied) < 2
-            or np.any(~np.isfinite(supplied))
-            or supplied[0] < 0
-            or np.any(np.diff(supplied) <= 0)
-        ):
-            raise ValueError("axial mesh edges must be finite, nonnegative and strictly increasing")
-        object.__setattr__(self, "rods_hk", rods)
-        object.__setattr__(self, "edges_Ainv", tuple(float(v) for v in supplied))
+    nodes, weights = roots_legendre(8)
+    for index, phi, angular_mass in _angular_cdf_panel_blocks(
+        panels, centers, widths, nodes, weights, min(batch_size, count)
+    ):
+        yield FiberQuadratureNodes(axial, index, phi, mass[index] * angular_mass)
 
 
 @dataclass(frozen=True, slots=True)
 class FiberIntegrationRule:
-    """Numerical proposal and integration controls, never physical peak cutoffs.
+    """The sole regular engine plus the necessary local-m0 endpoint controls.
 
-    Peak spacing and width only concentrate the normalized importance proposal.
-    The uniform component retains the complete geometrically bounded domain.
-    A local m0 domain reaching Q=0 requires an integrable structure/optical model,
-    such as the named Parratt composite; the coordinate rule cannot supply one.
-    Local-m0 angular order and panel cap override their global values only in
-    that channel; None inherits them. The physical integration measure is retained.
+    Regular rods use positive W du Gaussian panels and native-pixel indicators.
+    Numerical controls never remove physical peaks, tails or signed rods.
     """
 
-    axial_power: int = 12
-    angular_power: int = 5
-    seed: int = 0
-    axial_peak_spacing_L: float = 1.0
-    axial_peak_half_width_L: float = 0.02
+    strength_gauss_order: int = 4
+    strength_scalar_order: int = 16
+    strength_scalar_phase_step_rad: float = np.pi / 4
+    angular_initial_power: int = 5
+    pixel_error_rtol: float = 5e-5
+    pixel_error_atol: float = 1e-15
+    pixel_error_initial_width_rad: float = 0.1
+    pixel_error_maximum_depth: int = 32
+    pixel_error_maximum_bytes: int = 256 * 1024**2
+    local_m0_axial_power: int = 12
+    local_m0_angular_power: int = 5
+    local_m0_seed: int = 0
+    local_m0_peak_spacing_L: float = 1.0
+    local_m0_peak_half_width_L: float = 0.02
     local_m0_axial_peak_coordinate: str = "external_q"
+    local_m0_angular_resolution_fraction: float = 0.5
     source_latent_radius: float = 8.0
     maximum_backward_probability: float = 1e-12
+    maximum_angular_panel_nodes: int = 4194304
     batch_size: int = 16384
     cone_quadrature_order: int = 16
     stitch_grid_size: int = 513
     regular_q_bounds_Ainv: tuple[float, float] | None = None
     local_m0_q_bounds_Ainv: tuple[float, float] | None = None
-    quadrature_kind: str = "sobol"
-    maximum_axial_panel_width_Ainv: float | None = None
-    local_m0_maximum_axial_panel_width_Ainv: float | None = None
-    local_m0_angular_power: int | None = None
-    angular_support: str = "q_conditioned_union"
     frozen_ewald_bounds_Ainv_rad: tuple[float, float, float, float] | None = None
-    axial_meshes: tuple[AxialPanelMesh, ...] = ()
-    angular_panel_edges_rad: tuple[float, ...] | None = None
-    maximum_angular_panel_nodes: int = 4194304
-    angular_resolution_fraction: float = 0.5
-    angular_integration: str = "native_panels"
 
-    def __post_init__(self) -> None:
-        if self.local_m0_axial_peak_coordinate not in {"external_q", "film_phase_q_first_source"}:
-            raise ValueError("unknown local-m0 axial proposal coordinate")
-        if self.angular_integration not in {"native_panels", "nominal"}:
-            raise ValueError("angular integration must be native_panels or nominal")
-        if self.angular_integration == "nominal" and self.angular_panel_edges_rad is not None:
-            raise ValueError("nominal angular integration cannot use explicit panel edges")
-        if (
-            np.ndim(self.angular_resolution_fraction) != 0
-            or np.iscomplexobj(self.angular_resolution_fraction)
-            or not np.isfinite(self.angular_resolution_fraction)
-            or self.angular_resolution_fraction <= 0
-        ):
-            raise ValueError("angular_resolution_fraction must be finite and positive")
-        angular_edges = _validated_angular_edges(self.angular_panel_edges_rad, self.quadrature_kind)
-        if angular_edges is not None:
-            object.__setattr__(self, "angular_panel_edges_rad", tuple(angular_edges))
-        if (
-            type(self.maximum_angular_panel_nodes) is not int
-            or self.maximum_angular_panel_nodes < 1
-        ):
-            raise ValueError("angular panel node budget must be a positive integer")
-        meshes = tuple(AxialPanelMesh(**m) if isinstance(m, dict) else m for m in self.axial_meshes)
-        if any(not isinstance(m, AxialPanelMesh) for m in meshes):
-            raise TypeError("axial_meshes must contain declared AxialPanelMesh values")
-        if meshes and (self.quadrature_kind != "composite_gauss" or self.axial_power != 3):
-            raise ValueError(
-                "frozen axial meshes require composite_gauss and axial_power=3; refine mesh edges instead"
-            )
-        if meshes and (
-            self.maximum_axial_panel_width_Ainv is not None
-            or self.local_m0_maximum_axial_panel_width_Ainv is not None
-        ):
-            raise ValueError("explicit axial meshes cannot also request panel-width caps")
-        rods = [hk for mesh in meshes for hk in mesh.rods_hk]
-        if len(set(rods)) != len(rods):
-            raise ValueError("axial meshes must have disjoint rod groups")
-        object.__setattr__(self, "axial_meshes", meshes)
-        if self.local_m0_angular_power is not None and (
-            type(self.local_m0_angular_power) is not int or self.local_m0_angular_power < 0
-        ):
-            raise ValueError("local_m0_angular_power must be a nonnegative integer or None")
-        if self.frozen_ewald_bounds_Ainv_rad is not None:
-            bounds = tuple(float(v) for v in self.frozen_ewald_bounds_Ainv_rad)
-            if (
-                len(bounds) != 4
-                or not np.all(np.isfinite(bounds))
-                or not 0 <= bounds[0] < bounds[1]
-                or not 0 < bounds[3] <= 2 * np.pi
-            ):
-                raise ValueError(
-                    "frozen Ewald envelope requires ordered Q and a positive angular arc"
-                )
-            object.__setattr__(self, "frozen_ewald_bounds_Ainv_rad", bounds)
-        if self.angular_support not in {"q_conditioned_union", "fixed_union"}:
-            raise ValueError("angular support must be q_conditioned_union or fixed_union")
-        if self.quadrature_kind not in {"sobol", "composite_gauss"}:
-            raise ValueError("quadrature kind must be sobol or composite_gauss")
-        if self.quadrature_kind == "composite_gauss" and self.seed != 0:
-            raise ValueError("Gauss-Legendre has no random seed; use order refinement")
+    def __post_init__(self):
         for name in (
-            "maximum_axial_panel_width_Ainv",
-            "local_m0_maximum_axial_panel_width_Ainv",
+            "strength_gauss_order",
+            "strength_scalar_order",
+            "pixel_error_maximum_depth",
+            "pixel_error_maximum_bytes",
+            "maximum_angular_panel_nodes",
+            "batch_size",
+            "cone_quadrature_order",
+            "stitch_grid_size",
         ):
             value = getattr(self, name)
-            if value is not None:
-                if (
-                    self.quadrature_kind != "composite_gauss"
-                    or np.ndim(value) != 0
-                    or np.iscomplexobj(value)
-                    or not np.isfinite(value)
-                    or value <= 0
-                ):
-                    raise ValueError("a finite positive axial panel width requires composite_gauss")
-                object.__setattr__(self, name, float(value))
+            if type(value) is not int or value < 2:
+                raise ValueError(f"{name} must be an integer of at least two")
+        if (
+            self.strength_gauss_order > 16
+            or self.strength_scalar_order < max(8, self.strength_gauss_order)
+            or self.cone_quadrature_order < 4
+            or self.stitch_grid_size < 257
+        ):
+            raise ValueError("inadequate strength, cone or stitch quadrature order")
+        for name in (
+            "angular_initial_power",
+            "local_m0_axial_power",
+            "local_m0_angular_power",
+            "local_m0_seed",
+        ):
+            if type(getattr(self, name)) is not int or getattr(self, name) < 0:
+                raise ValueError(f"{name} must be a nonnegative integer")
+        for name in (
+            "strength_scalar_phase_step_rad",
+            "pixel_error_rtol",
+            "pixel_error_atol",
+            "pixel_error_initial_width_rad",
+            "local_m0_peak_spacing_L",
+            "local_m0_peak_half_width_L",
+            "local_m0_angular_resolution_fraction",
+            "source_latent_radius",
+        ):
+            value = getattr(self, name)
+            if (
+                np.ndim(value) != 0
+                or np.iscomplexobj(value)
+                or not np.isfinite(value)
+                or value <= 0
+            ):
+                raise ValueError(f"{name} must be finite and positive")
+        if self.local_m0_axial_peak_coordinate not in {"external_q", "film_phase_q_first_source"}:
+            raise ValueError("unknown local-m0 proposal coordinate")
+        if not 0 <= self.maximum_backward_probability < 1:
+            raise ValueError("maximum_backward_probability must lie in [0,1)")
         for name in ("regular_q_bounds_Ainv", "local_m0_q_bounds_Ainv"):
             value = getattr(self, name)
             if value is not None:
+                if np.iscomplexobj(value):
+                    raise ValueError("Q support must be real")
                 bounds = tuple(float(v) for v in value)
                 if (
                     len(bounds) != 2
                     or not np.all(np.isfinite(bounds))
                     or not 0 <= bounds[0] < bounds[1]
                 ):
-                    raise ValueError("frozen Q bounds must be a finite increasing nonnegative pair")
+                    raise ValueError("Q support must be a finite increasing nonnegative pair")
                 object.__setattr__(self, name, bounds)
-        if type(self.stitch_grid_size) is not int or self.stitch_grid_size < 257:
-            raise ValueError("stitch grid size must be an integer of at least 257")
-        if type(self.cone_quadrature_order) is not int or self.cone_quadrature_order < 4:
-            raise ValueError("cone quadrature order must be an integer of at least four")
-        for name in ("axial_power", "angular_power", "seed", "batch_size"):
-            value = getattr(self, name)
-            if type(value) is not int or value < (1 if name == "batch_size" else 0):
-                raise ValueError(f"{name} must be a valid nonnegative integer")
-        for name in ("axial_peak_spacing_L", "axial_peak_half_width_L", "source_latent_radius"):
-            value = float(getattr(self, name))
-            if not np.isfinite(value) or value <= 0:
-                raise ValueError(f"{name} must be finite and positive")
-            object.__setattr__(self, name, value)
-        if not 0 <= self.maximum_backward_probability < 1:
-            raise ValueError("maximum_backward_probability must lie in [0,1)")
+        if self.frozen_ewald_bounds_Ainv_rad is not None:
+            supplied = self.frozen_ewald_bounds_Ainv_rad
+            if np.iscomplexobj(supplied):
+                raise ValueError("frozen Ewald envelope must be real")
+            bounds = tuple(float(v) for v in supplied)
+            if (
+                len(bounds) != 4
+                or not np.all(np.isfinite(bounds))
+                or not 0 <= bounds[0] < bounds[1]
+                or not 0 < bounds[3] <= 2 * np.pi
+            ):
+                raise ValueError("frozen Ewald envelope requires finite Q and angular support")
+            object.__setattr__(self, "frozen_ewald_bounds_Ainv_rad", bounds)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1915,9 +1409,11 @@ class ConditionalFiberBatch:
 
     Rods remain individual physical identities. Both signed SF sheets use the
     same spatial kernels and quadrature masses; their cone angles are c and pi-c.
-    ``integrated_coefficient`` contains the source and optical coefficients times
-    d(axial) d(azimuth), with unit rod population. It is an integrated event
-    coefficient, not a density to multiply by a second detector Jacobian.
+    ``integrated_coefficient`` contains source/optical coefficients and d(azimuth).
+    Regular weighted batches also contain physical W(u)du, including canonical
+    strengths and rod populations; only S+/W and S-/W remain to contract. Local-m0
+    unweighted batches contain du with unit geometric rod population and require
+    the canonical strength table. Neither needs a second detector Jacobian.
     """
 
     source_state_index: int
@@ -1928,6 +1424,9 @@ class ConditionalFiberBatch:
     transfer: FiberDetectorTransfer
     integrated_coefficient: NDArray[np.float64]
     local_m0: LocalM0DetectorTransfer | None = None
+    signed_strength_fractions: NDArray[np.float64] | None = None
+    angular_error_indicator: float = 0.0
+    native_pixel_patch: tuple[tuple[int, int, int, int], NDArray[np.float64]] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "rods", tuple(self.rods))
@@ -1957,6 +1456,19 @@ class ConditionalFiberBatch:
             or any(not isinstance(rod, Rod) for rod in self.rods)
         ):
             raise ValueError("fiber batch identities, nodes and transfer must align")
+        if not np.isfinite(self.angular_error_indicator) or self.angular_error_indicator < 0:
+            raise ValueError("angular error indicator must be finite and nonnegative")
+        if self.signed_strength_fractions is not None:
+            fractions = np.array(self.signed_strength_fractions, dtype=float, copy=True)
+            if (
+                fractions.shape != (2, len(self.positive_axial_Ainv))
+                or np.any(~np.isfinite(fractions))
+                or np.any(fractions < 0)
+                or not np.allclose(fractions.sum(axis=0), 1, rtol=0, atol=5e-15)
+            ):
+                raise ValueError("weighted batch signed fractions must align")
+            fractions.setflags(write=False)
+            object.__setattr__(self, "signed_strength_fractions", fractions)
         if self.local_m0 is not None and self.local_m0.transfer is not self.transfer:
             raise ValueError("local metadata must describe this same transfer")
 
@@ -1978,15 +1490,18 @@ def iter_conditional_fiber_transfers(
     source_state_indices: tuple[int, ...] | None = None,
     scattering_cache: FiberScatteringCache | None = None,
     include_source_mass: bool = True,
+    regular_integrator: Callable[..., Iterator[ConditionalFiberBatch]] | None = None,
 ) -> Iterator[ConditionalFiberBatch]:
     """Stream the same continuous transfers for native fits and full-panel images.
 
     Bounds describe the requested observable. A renderer supplies its panel
-    domain; it cannot reuse an ROI-pruned fit response. Ordinary unstitched m0
-    uses the same planar kinematic optics as every other rod. The local air-Ewald
+    domain; it cannot reuse an ROI-pruned fit response. Unstitched m0 uses
+    the same positive interior-node regular engine and planar kinematic optics. The local air-Ewald
     chart is reserved for the explicitly requested local-lamella composite.
     Source masses are kept intact when rows or directions have no valid support.
     """
+    if regular_integrator is None:
+        raise ValueError("the strength-weighted regular integrator must be supplied explicitly")
     if not isinstance(rule, FiberIntegrationRule) or type(local_stitched_m0) is not bool:
         raise TypeError("an explicit integration rule and local-composite selection are required")
     validate_conditional_spatial_support(source, instrument)
@@ -2017,23 +1532,6 @@ def iter_conditional_fiber_transfers(
                 break
         else:
             groups.append((radius, [rod]))
-    if rule.axial_meshes:
-        for radius, group in groups:
-            group_key = tuple(sorted((r.h, r.k) for r in group))
-            coordinate = (
-                "external_local_m0_q"
-                if radius == 0 and local_stitched_m0
-                else "positive_phase_axial"
-            )
-            matches = [
-                m
-                for m in rule.axial_meshes
-                if m.rods_hk == group_key and m.coordinate == coordinate
-            ]
-            if len(matches) != 1:
-                raise ValueError(
-                    "axial meshes must cover every complete current rod group and coordinate"
-                )
     states = incident.states
     valid_sources = [int(index) for index in np.flatnonzero(states.valid)]
     requested = valid_sources if source_state_indices is None else list(source_state_indices)
@@ -2079,22 +1577,19 @@ def iter_conditional_fiber_transfers(
                     )
                 source_bounds = np.asarray([frozen])
             channel_bounds[local][si] = source_bounds
-            if (
-                len(source_bounds)
-                and si in active_sources
-                and rule.angular_panel_edges_rad is None
-                and rule.angular_integration == "native_panels"
-            ):
+            if len(source_bounds) and si in active_sources and local:
                 angular_regions[local, si] = native_angular_resolution_regions(
                     native_bounds_px=native_bounds_px,
                     source_state_index=si,
                     local_m0=local,
-                    resolution_fraction=rule.angular_resolution_fraction,
+                    resolution_fraction=rule.local_m0_angular_resolution_fraction,
                     source_latent_radius=rule.source_latent_radius,
                     maximum_backward_probability=rule.maximum_backward_probability,
                     **context,
                 )
     for gi, (radius, group) in enumerate(groups):
+        if all(rod.population == 0 for rod in group):
+            continue
         if cancel_requested is not None and cancel_requested():
             raise CancelledError
         local = radius == 0 and local_stitched_m0
@@ -2112,7 +1607,7 @@ def iter_conditional_fiber_transfers(
             q_lower, q_upper = frozen
         lower = np.sqrt(max(0.0, q_lower**2 - radius**2))
         upper = np.sqrt(max(0.0, q_upper**2 - radius**2))
-        spacing = b3 * rule.axial_peak_spacing_L
+        spacing = b3 * rule.local_m0_peak_spacing_L
         centers = np.arange(np.floor(lower / spacing), np.ceil(upper / spacing) + 1) * spacing
         if local and rule.local_m0_axial_peak_coordinate == "film_phase_q_first_source":
             # Historical numerical proposal: first source wavelength, unchanged full support.
@@ -2141,19 +1636,6 @@ def iter_conditional_fiber_transfers(
             centers = centers[(centers >= lower) & (centers <= upper)]
         if not len(centers):
             centers = np.array([(lower + upper) / 2])
-        group_key = tuple(sorted((r.h, r.k) for r in group))
-        meshes = [m for m in rule.axial_meshes if any(hk in group_key for hk in m.rods_hk)]
-        mesh = meshes[0] if meshes else None
-        if mesh is not None and (
-            len(meshes) != 1
-            or mesh.rods_hk != group_key
-            or mesh.coordinate != ("external_local_m0_q" if local else "positive_phase_axial")
-        ):
-            raise ValueError("axial mesh must match the complete rod group and coordinate")
-        if mesh is not None:
-            if mesh.edges_Ainv[0] > lower or mesh.edges_Ainv[-1] < upper:
-                raise ValueError("frozen axial mesh does not enclose current source-region support")
-            lower, upper = mesh.edges_Ainv[0], mesh.edges_Ainv[-1]
         for si in active_sources:
             if cancel_requested is not None and cancel_requested():
                 raise CancelledError
@@ -2164,85 +1646,131 @@ def iter_conditional_fiber_transfers(
                 if local
                 else states.k_film_phase_sample_Ainv[si]
             )
-            coordinate_batches = iter_conditional_fiber_coordinates(
+            coordinate_parameters = dict(
                 axial_bounds_Ainv=(lower, upper),
                 axial_peak_centers_Ainv=centers,
-                axial_peak_half_width_Ainv=b3 * rule.axial_peak_half_width_L,
+                axial_peak_half_width_Ainv=b3 * rule.local_m0_peak_half_width_L,
                 radial_Ainv=radius,
                 ki_sample_Ainv=ki,
                 normal_sample=normal,
                 source_region_bounds=bounds[si],
                 reference_mosaic=reference_mosaic,
-                axial_power=rule.axial_power,
+                axial_power=rule.local_m0_axial_power,
                 angular_power=(
-                    rule.local_m0_angular_power
-                    if local and rule.local_m0_angular_power is not None
-                    else rule.angular_power
+                    rule.local_m0_angular_power if local else rule.angular_initial_power
                 ),
-                axial_seed=7919 * rule.seed + 65537 * gi + 1009,
-                angular_shift_seed=8191 * si + 7919 * rule.seed + 131 * gi + 973,
-                quadrature_kind=rule.quadrature_kind,
-                maximum_axial_panel_width_Ainv=(
-                    rule.local_m0_maximum_axial_panel_width_Ainv
-                    if local and rule.local_m0_maximum_axial_panel_width_Ainv is not None
-                    else rule.maximum_axial_panel_width_Ainv
-                ),
-                angular_support=rule.angular_support,
-                axial_panel_edges_Ainv=None if mesh is None else mesh.edges_Ainv,
-                angular_panel_edges_rad=rule.angular_panel_edges_rad,
-                maximum_angular_panel_nodes=rule.maximum_angular_panel_nodes,
+                axial_seed=7919 * rule.local_m0_seed + 65537 * gi + 1009,
                 angular_resolution_regions=angular_regions.get((local, si)),
+                maximum_angular_panel_nodes=rule.maximum_angular_panel_nodes,
                 batch_size=rule.batch_size,
             )
-            for nodes in coordinate_batches:
+            batch_parameters = dict(
+                rods=tuple(group),
+                radial_Ainv=radius,
+                reciprocal_basis_Ainv=basis,
+                crystal_to_sample=rotation,
+                source_state_index=si,
+                local=local,
+                rule=rule,
+                scattering_cache=scattering_cache,
+                include_source_mass=include_source_mass,
+                **context,
+            )
+            if not local:
+                yield from regular_integrator(
+                    coordinate_parameters=coordinate_parameters,
+                    batch_parameters=batch_parameters,
+                    cancel_requested=cancel_requested,
+                    channel_count=len(groups) * len(valid_sources),
+                )
+                continue
+            for nodes in iter_local_m0_coordinates(**coordinate_parameters):
                 if cancel_requested is not None and cancel_requested():
                     raise CancelledError
-                if not len(nodes.axial_index):
-                    continue
-                axial_index = nodes.axial_index
-                axial = nodes.positive_axial_Ainv[axial_index]
-                azimuth = nodes.ewald_azimuth_rad
-                args = dict(source_state_index=si, **context)
-                if local:
-                    coordinates = dict(external_q_Ainv=axial, ewald_azimuth_rad=azimuth)
-                else:
-                    rod = replace(group[0], population=1.0)
-                    offset = (rod.h * basis[:, 0] + rod.k * basis[:, 1]) @ crystal_normal
-                    coordinates = dict(
-                        rod=rod,
-                        reciprocal_basis_Ainv=basis,
-                        crystal_to_sample=rotation,
-                        L=(axial - offset) / b3,
-                        ewald_azimuth_rad=azimuth,
-                    )
-                if scattering_cache is None:
-                    scattering = (
-                        _compile_local_scattering if local else _compile_fiber_scattering
-                    )(**coordinates, **args)
-                else:
-                    scattering = scattering_cache.compile(
-                        local=local, coordinates=coordinates, context=args
-                    )
-                transfer, local_transfer = project_conditional_fiber_transfer(
-                    scattering,
-                    source=source,
-                    incident=incident,
-                    source_state_index=si,
-                    instrument=instrument,
-                    maximum_backward_probability=rule.maximum_backward_probability,
-                    include_source_mass=include_source_mass,
-                )
-                if transfer is None:
-                    continue
-                selected = transfer.quadrature_index
-                coefficient = transfer.coefficient_per_L_rad / (1 if local else b3)
-                yield ConditionalFiberBatch(
-                    si,
-                    tuple(group),
-                    radius,
-                    nodes.positive_axial_Ainv,
-                    axial_index[selected],
-                    transfer,
-                    coefficient * nodes.weight_Ainv_rad[selected],
-                    local_transfer,
-                )
+                batch = compile_conditional_fiber_batch(nodes, **batch_parameters)
+                if batch is not None:
+                    yield batch
+
+
+def compile_conditional_fiber_batch(
+    nodes: FiberQuadratureNodes,
+    *,
+    rods,
+    radial_Ainv,
+    reciprocal_basis_Ainv,
+    crystal_to_sample,
+    source_state_index,
+    local,
+    rule,
+    scattering_cache,
+    include_source_mass,
+    source,
+    incident,
+    material,
+    instrument,
+) -> ConditionalFiberBatch | None:
+    """One geometry/optics/projector for local-m0 du and regular W du rules.
+
+    None means no retained evaluated events; it does not prove an empty interval.
+    """
+    if not len(nodes.axial_index):
+        return None
+    axial = nodes.positive_axial_Ainv[nodes.axial_index]
+    azimuth = nodes.ewald_azimuth_rad
+    args = dict(
+        source_state_index=source_state_index,
+        source=source,
+        incident=incident,
+        material=material,
+        instrument=instrument,
+    )
+    if local:
+        coordinates = dict(external_q_Ainv=axial, ewald_azimuth_rad=azimuth)
+    else:
+        basis = reciprocal_basis_Ainv
+        b3 = np.linalg.norm(basis[:, 2])
+        normal = basis[:, 2] / b3
+        rod = replace(rods[0], population=1.0)
+        offset = (rod.h * basis[:, 0] + rod.k * basis[:, 1]) @ normal
+        coordinates = dict(
+            rod=rod,
+            reciprocal_basis_Ainv=basis,
+            crystal_to_sample=crystal_to_sample,
+            L=(axial - offset) / b3,
+            ewald_azimuth_rad=azimuth,
+        )
+    if scattering_cache is None:
+        scattering = (_compile_local_scattering if local else _compile_fiber_scattering)(
+            **coordinates, **args
+        )
+    else:
+        scattering = scattering_cache.compile(local=local, coordinates=coordinates, context=args)
+    transfer, local_transfer = project_conditional_fiber_transfer(
+        scattering,
+        source=source,
+        incident=incident,
+        source_state_index=source_state_index,
+        instrument=instrument,
+        maximum_backward_probability=rule.maximum_backward_probability,
+        include_source_mass=include_source_mass,
+    )
+    if transfer is None:
+        return None
+    selected = transfer.quadrature_index
+    coefficient = transfer.coefficient_per_L_rad / (1 if local else b3)
+    mass = (
+        nodes.weight_Ainv_rad
+        if nodes.strength_weighted_mass is None
+        else nodes.strength_weighted_mass
+    )
+    return ConditionalFiberBatch(
+        source_state_index,
+        rods,
+        radial_Ainv,
+        nodes.positive_axial_Ainv,
+        nodes.axial_index[selected],
+        transfer,
+        coefficient * mass[selected],
+        local_transfer,
+        nodes.signed_strength_fractions,
+    )

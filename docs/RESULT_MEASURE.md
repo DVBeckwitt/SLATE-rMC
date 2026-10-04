@@ -517,3 +517,21 @@ block's exact `ContinuousRegionQuadrature`. Candidate site or population coordin
 scales are profiled jointly with the full declared covariance at each candidate.
 Regular kinematic `00L` uses the same factorization after its positive-Q support gate. The optional
 local-lamella Parratt composite is a separate declared observable and is not part of this response.
+
+
+## Conditional native strength-weighted measure
+
+Regular conditional integration uses W(u) du, W=S+(u)+S-(u), including canonical
+physical rod populations and incoherent mixture weights. Interior Gaussian nodes
+carry physical mass and S+/W, S-/W fractions. The shared compiler applies dL/du
+once; signed contraction retains every original source, cone, optical, attenuation,
+polarization, phase and deposition factor. No probability/image renormalization
+is introduced. Analytic zero populations/occupancies contribute zero; unresolved
+sampled-zero measures fail.
+
+Native images/regions accumulate integrated native pixel mass through literal
+fractional memberships. Continuous `density_at` is a distinct A2/px2 observable
+through the same prepared event kernels. Native parent/child indicators and discrete
+moments do not qualify continuous regions, axial convergence or a full physical
+image. Earlier continuous matched-region and structure-response contracts above
+remain separate declared observables.

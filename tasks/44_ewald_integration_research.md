@@ -773,3 +773,91 @@ formatting/lint/whitespace and evidence-integrity checks pass; they do not estab
 adequacy. Temporary external files are sealed and removed before handoff. Main remains clean
 at 4cf84defb0fd1326dd98714544dcfda44049976d; research receives one coherent documentation checkpoint,
 with no merge or push.
+
+
+## Fifth milestone: sole-engine replacement candidate (October 3, 2026)
+
+Human steering selected the strength-weighted Gaussian method, required removal of
+the old regular engine, and superseded the unfinished extended convergence campaign.
+Nominal scoped evidence is sufficient for this implementation decision. Scientific
+continuation belongs to the root chat after reviewing this coherent candidate;
+no fit, interface investigation, full physical image or new timing/convergence
+campaign was launched in the replacement worker. Engine/science automations remain paused.
+
+The shipped regular path now prepares physical response panels and cheap finite-depth
+scalar fringes, constructs positive W du Gaussian rules, and carries canonical
+S+/W/S-/W through the shared compiler. Angular GL8 parent/children compile jointly;
+accepted children and their compact native patches are retained. Tiled native L1
+indicators avoid another full image. Callers accumulate patches into one image or
+literal fractional region memberships. Spatial order stays 16 and retains b3e73fd's
+complementary residual and rolling corner/tail repairs. Local-m0 keeps its required
+endpoint chart. Unstitched Pb `(0,0)` uses regular positive interior nodes; no q=0
+sample, alternate ordinary engine or new physical normalization is introduced.
+
+CIF, Pb finite surface and Bi2X3 finite-stack providers retain their authoritative
+strengths. Each distinct candidate rebuilds W-dependent axial and actual-mosaic
+angular preparation. Exact completed predictions and bounded pre-projection
+scattering reuse remain explicit. Complete G/L output prepares both pure laws even
+at eta endpoints. Actual fitting/search, covariance/rank, guard, checkpoint identity,
+reference-correction warm starts and qualification/selection states remain binding.
+Manual meshes, ordinary selectors/fallbacks and retained sparse detector/mosaic
+responses are removed. Continuous density calls retain the same event/kernel path,
+with their distinct observable qualification obligation.
+
+Physics v1 migration is explicit into a new v2 file. Existing physical fields remain
+unchanged. Observation descriptors, catalog entries and external plan experiment
+bindings must be copied/rebound to new exact physical/source-observation identities;
+old baseline/results/status cannot be relabeled. The active preparation CLI exposes
+its existing catalog API. Current contracts and the full procedure are in
+`docs/ENGINE_MIGRATION.md`; tracked historical recipe bindings remain historical.
+
+Focused results:
+
+- Final constructor replay reproduced archived four-node coordinates and weights exactly.
+- Supported finite-provider scalar preparation passed. This establishes constructor
+  compatibility and discrete positive mass, not continuous/full-support axial accuracy.
+- Bi source0 used two shared compiler calls at 64 fixed coordinates. Weighted-vs-du
+  event mass relative difference was 2.863652944061316e-16; explicit signed contraction
+  and pure-law recombination agreed at the declared float64 tolerances.
+- Pb unstitched zero rod used three compiler calls, 64 positive-node coordinates,
+  24 retained events and original source0 weight 0.04117259552042161. Weighted-vs-du
+  relative difference was 1.858134806490237e-16. Source mass applied once; one scattering
+  build/two reuses retained current projection. All 32 original source weights remained intact.
+- Exactly 16 native physical pixels were deposited. Literal shared fractional region
+  memberships returned [3.6, 5.800000000000001]. Complex/nonfinite/negative patches
+  were rejected; tiled comparison matched an independent small dense union.
+- All six physical inputs migrated with unchanged physical fields. Four active CLI
+  imports/help, current plan controls and obsolete/nonaccuracy refinement rejection passed.
+- Active catalog preparation relocated the migrated Bi input. All 1250 net observations,
+  their covariance and projection revision remained exact. The production experiment-binding
+  guard accepted new exact identities and rejected historical ones, without running a fit.
+- Configured offline isolated wheel build packaged both new modules. Ruff lint/format,
+  diff/import review and scoped source checks passed. Final runtime code differs from the
+  physical-check snapshots only by the ConditionalFiberBatch measure docstring; stripped
+  executable ASTs agree. No numerical validation is inferred from software checks.
+
+The combined interval/native-component smoke hit its 400-second cap (charged
+400.0200621000258 seconds). It saved only at the end, so no completed stage or timeout
+location can be inferred. Its later disk snapshot is not a verified start-time binding
+and supplies no validation claim. New checks used prelaunch source receipts and saved
+completed stages separately. Named temporary checker failures were preserved: nonexistent
+covariance attribute, importing an isolation-only backend from the runtime, and Windows
+path spelling. Repairs finished only remaining stages; completed physical work was not rerun.
+
+Exactly one new archive is retained externally:
+`ewald_engine_replacement_20261003.ra_diag.npz`, SHA256
+`7d15d7a26e367d6ed3d03ba982f8da3cee932a8ed8e8254fe2547b4e52fcaf4d`,
+17,804,894 bytes, 36 numeric arrays and one JSON manifest. It contains exact temporary
+sources, early/late source distinctions, final runtime sources, prelaunch receipts,
+measured outcomes/failures, migrated input/binding evidence and protected archive hashes.
+Nine prior archives remain unchanged. Temporary check sources, outputs, prepared copies
+and wheel are removed after sealing; no repository test/proof/benchmark suite is retained.
+
+The existing milestone ceiling remains 2400 seconds within the 7200-second campaign.
+Measured checks cost 429.62165219988674 seconds including all failures. Closure is charged
+conservatively at 180 seconds (archive publication/verification took 3.465283800032921
+seconds). Milestone charge is 609.6216521998867; cumulative charge is
+4119.621652199887, leaving 3080.3783478001133 seconds. No budget reset or new campaign
+was introduced. Full-support/image superiority, continuous-density convergence and fit
+qualification remain unresolved; scoped method evidence cannot promote a fitted result.
+Main remains clean at 4cf84def. The candidate remains isolated for root review.

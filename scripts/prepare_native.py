@@ -467,6 +467,7 @@ def main():
     selection.add_argument("--observations", type=Path)
     selection.add_argument("--sample", help="sample ID from configs/native_experiments.json")
     parser.add_argument("--input-root", type=Path)
+    parser.add_argument("--catalog", type=Path, help="explicit copied/migrated experiment catalog")
     parser.add_argument(
         "--with-baseline",
         action="store_true",
@@ -487,6 +488,7 @@ def main():
             args.input_root,
             args.output_directory,
             with_baseline=args.with_baseline,
+            catalog_path=args.catalog,
             raw_path=args.raw,
             dark_path=args.dark,
             geometry_position=args.geometry_position,
@@ -494,8 +496,8 @@ def main():
             geometry_image_id=args.geometry_image_id,
         )
     else:
-        if args.input_root is not None or args.with_baseline:
-            parser.error("--input-root and --with-baseline require --sample")
+        if args.input_root is not None or args.with_baseline or args.catalog is not None:
+            parser.error("--input-root, --catalog and --with-baseline require --sample")
         output = prepare(
             args.observations,
             args.output_directory,

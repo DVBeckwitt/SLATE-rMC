@@ -277,11 +277,11 @@
     0.0
   ],
   "integration_override": {
-    "angular_integration": "nominal",
-    "axial_power": 10,
-    "angular_power": 3
+    "local_m0_axial_power": 10,
+    "local_m0_angular_power": 3,
+    "angular_initial_power": 3
   },
-  "workers": 4,
+  "workers": 1,
   "finite_difference_step": 1e-06,
   "require_initial_qualification": false,
   "qualify_fitted_candidates": false,

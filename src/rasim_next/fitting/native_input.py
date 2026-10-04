@@ -390,8 +390,10 @@ def load_native_fit_physics(path: Path) -> NativeFitPhysics:
     """
     payload = Path(path).read_bytes()
     record = json.loads(payload)
-    if record.get("schema") != "rasim-native-fit-physics-v1":
-        raise ValueError("unsupported native fit physical schema")
+    if record.get("schema") != "rasim-native-fit-physics-v2":
+        raise ValueError(
+            "native physics requires schema v2; use scripts/migrate_native_physics.py for v1 inputs"
+        )
     expected = {
         "schema",
         "sample_id",

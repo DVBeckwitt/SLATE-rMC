@@ -14,10 +14,7 @@ from rasim_next.fitting.native_instrument import (
 )
 from rasim_next.fitting.native_observations import NativeFitObservations
 from rasim_next.fitting.native_structure import native_stitch_records
-from rasim_next.pipeline.conditional_detector import NativeMosaicCache
-from rasim_next.pipeline.detector_revisions import _instrument_revision
 from rasim_next.pipeline.fiber_detector import FiberScatteringCache
-from rasim_next.pipeline.source_spatial import NativeSpatialRegionProjection
 
 
 class NativeRefinementModel(Protocol):
@@ -40,9 +37,9 @@ class NativeRefinementModel(Protocol):
 class NativeJointEvaluator:
     """Bounded explicit caches; every trial rebinds atomic amplitudes and optics.
 
-    The reference projection, numerical proposal and instrument owner are fixed.
-    Source, optics, basis or rigid geometry changes invalidate compiled responses.
-    Film thickness, ADPs and stacking reuse geometry and re-evaluate intensities.
+    Current strength, thickness, source, optics, mosaic and rigid geometry
+    always prepare a new response. Exact completed candidate predictions reuse
+    only within this immutable evaluator and observation projection.
     """
 
     model: NativeRefinementModel
@@ -54,12 +51,14 @@ class NativeJointEvaluator:
     evaluation_count: int = field(default=0, init=False)
     contraction_count: int = field(default=0, init=False)
     compile_seconds: float = field(default=0, init=False)
-    _responses: OrderedDict = field(default_factory=OrderedDict, init=False, repr=False)
     _predictions: OrderedDict = field(default_factory=OrderedDict, init=False, repr=False)
     scattering_cache: FiberScatteringCache = field(default_factory=FiberScatteringCache, repr=False)
-    _spatial_projection: NativeSpatialRegionProjection | None = field(
-        default=None, init=False, repr=False
-    )
+
+    def __post_init__(self):
+        if type(self.worker_count) is not int or self.worker_count != 1:
+            raise ValueError(
+                "native preparation uses one worker; use prediction_workers for parallel candidates"
+            )
 
     @property
     def parameter_names(self):
@@ -98,9 +97,9 @@ class NativeJointEvaluator:
     def predict(self, values, coherent_repeats, *, resolve_mosaic_components: bool = False):
         """Raw native masses, or complete (Gaussian/Lorentzian, observation) columns.
 
-        Component requests share response and strength work. Their cache identity
-        is distinct from mixed predictions; contraction_count includes each
-        component in every disjoint source/rod partition. No eta is extrapolated.
+        Each pure component prepares its own angular panels, including inactive
+        eta-boundary components. Exact component predictions have their own cache
+        identity. Their recombination remains subject to numerical qualification.
         """
         if type(resolve_mosaic_components) is not bool:
             raise TypeError("resolve_mosaic_components must be boolean")
@@ -145,101 +144,40 @@ class NativeJointEvaluator:
         object.__setattr__(self, "evaluation_count", self.evaluation_count + 1)
         return prediction
 
-    def predict_axial_panels(self, values, coherent_repeats):
-        """Return raw (panel, observation) contributions in declared mesh order.
-
-        This decomposition uses the ordinary response and physical contraction;
-        it is not an alternative detector model or a normalized partial signal.
-        """
-        physics, arguments, mosaic, stack = self.bind(values, coherent_repeats)
-        meshes = physics.integration_rule.axial_meshes
-        if not meshes:
-            raise ValueError("panel predictions require explicit axial meshes")
-        return sum(
-            (
-                self._predict_part(part, arguments, mosaic, stack, resolve_axial_panels=True)
-                for part in physics.integration_parts()
-            ),
-            np.zeros(
-                (sum(len(m.edges_Ainv) - 1 for m in meshes), len(self.observations.net_count))
-            ),
-        )
-
-    def _predict_part(
-        self,
-        physics,
-        arguments,
-        mosaic,
-        stack,
-        *,
-        resolve_axial_panels=False,
-        resolve_mosaic_components=False,
-    ):
-        """Evaluate one disjoint rod partition with its normalized source rule."""
-        detector = physics.detector(mosaic=self.proposal_mosaic, **arguments)
-        # Thickness changes attenuation weights, never the accepted spatial ray map.
-        # This backend rejects finite footprint/external absorption at construction.
-        key = (
-            physics.rods,
-            physics.integration_rule,
-            physics.material.material_revision,
-            physics.reciprocal_basis_Ainv.tobytes(),
-            physics.source.mean_rays.origin_lab_m.tobytes(),
-            physics.source.mean_rays.direction_lab.tobytes(),
-            physics.source.mean_rays.wavelength_A.tobytes(),
-            physics.source.mean_rays.polarization_state_id,
-            physics.source.conditional_origin_factor_lab_m.tobytes(),
-            _instrument_revision(replace(physics.instrument, film_thickness_A=1.0)),
-        )
-        if key in self._responses:
-            cache = self._responses.pop(key)
+    def _predict_part(self, physics, arguments, mosaic, stack, *, resolve_mosaic_components=False):
+        """Reprepare every distinct candidate; only exact completed predictions cache."""
+        if resolve_mosaic_components:
+            if mosaic.gaussian_sigma_rad <= 0 or mosaic.lorentzian_half_width_rad <= 0:
+                raise ValueError("component predictions require both positive mosaic widths")
+            laws = (
+                MosaicParameters(mosaic.gaussian_sigma_rad, 0.0, 0.0),
+                MosaicParameters(0.0, mosaic.lorentzian_half_width_rad, 1.0),
+            )
         else:
+            laws = (mosaic,)
+        predictions = []
+        for law in laws:
             start = perf_counter()
-            if self._spatial_projection is None:
-                object.__setattr__(
-                    self,
-                    "_spatial_projection",
-                    NativeSpatialRegionProjection(self.observations.projection),
-                )
-            cache = NativeMosaicCache(
-                detector.compile_native_response(
-                    self.observations.projection,
-                    worker_count=self.worker_count,
-                    spatial_projection=self._spatial_projection,
-                    scattering_cache=self.scattering_cache,
+            detector = physics.detector(mosaic=law, **arguments)
+            detector = replace(
+                detector, proposal_mosaic=self.proposal_mosaic, specular_stitch_stack=stack
+            )
+            predictions.append(
+                detector.integrate_native_regions(
+                    self.observations.projection, scattering_cache=self.scattering_cache
                 )
             )
             object.__setattr__(
                 self, "compile_seconds", self.compile_seconds + perf_counter() - start
             )
             object.__setattr__(self, "compile_count", self.compile_count + 1)
-        self._responses[key] = cache
-        matching = [k for k in self._responses if k[0] == physics.rods]
-        for old_key in matching[:-2]:
-            del self._responses[old_key]
-        prediction = cache.response.evaluate(
-            detector.strength_model,
-            mosaic=mosaic,
-            thickness_A=arguments["film_thickness_A"],
-            specular_stitch_stack=stack,
-            mosaic_cache=cache,
-            source_weights=physics.source.mean_rays.source_weight,
-            resolve_axial_panels=resolve_axial_panels,
-            resolve_mosaic_components=resolve_mosaic_components,
-        )
-        object.__setattr__(
-            self,
-            "contraction_count",
-            self.contraction_count + (2 if resolve_mosaic_components else 1),
-        )
-        return prediction
+            object.__setattr__(self, "contraction_count", self.contraction_count + 1)
+        return np.stack(predictions) if resolve_mosaic_components else predictions[0]
 
     def clear_responses(self):
-        self._responses.clear()
         self.scattering_cache.entries.clear()
         self.scattering_cache.retained_bytes = 0
         self._predictions.clear()
-        object.__setattr__(self, "_spatial_projection", None)
 
     def inactive_parameters(self, values, coherent_repeats):
         """Exact physical inactivity at mixture boundaries; coordinates stay free.

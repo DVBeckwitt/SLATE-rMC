@@ -301,23 +301,28 @@ The same physical evaluator supports native fits and rendering.
 Generic finite-CIF strength delegates site tensors to the authoritative ordered amplitude.
 Local m0 geometry and phase-Q, complex exit branches, detector revisions and finite Pb endpoint
 arithmetic remain shared with their existing owners. Current main's beam-position viewer and
-configured sampled-source routes are preserved. The explicit Bi execution resource may reuse
-unchanged material/basis responses; cell and occupancy candidates rebuild transport. There is
+configured sampled-source routes are preserved. Every distinct native candidate rebuilds strength-dependent preparation;
+event scattering reuses only unchanged actual dependencies. There is
 no plugin backend, hidden global cache, new dependency or imported legacy runtime.
 
 Contract v16 extends this path to the complete declared Pb phase roster and explicit
 source/instrument candidates. `native_structure` is the common lattice/optics rebinder;
-`native_joint` is the response owner; `native_search` and `native_accuracy` consume ordinary
+`native_joint` is the candidate prediction owner; `native_search` and `native_accuracy` consume ordinary
 prediction callables and immutable observations. They contain no scattering equations.
 `scripts/refine_native.py` orchestrates numerical checks, all-active fits, discrete choices,
 profiles, controls and conditional validation. The Bi-specific v15 API remains supported.
 No additional dependency or parallel physical implementation is introduced.
 
-Contract v17 keeps that ownership. `fiber_detector` owns the explicit numerical proposal
-domains and composite axial/angular quadrature; `reflectivity.specular` owns the named overlap
-measure. Native response identity includes both declarations. The runner separates optimizer
-candidates from numerically checked selections and checks profile/conditional predictions
-through `native_accuracy`, reusing the existing covariance and validation equations.
-`fiber_detector` also owns the declared angular-support policy. Its optional fixed union
-prevents individual observation Q boundaries from remeshing angular integration. Native
-projection retains the same observation memberships, covariance and physical factors.
+Contract v18 preserves physics and fitting ownership while replacing ordinary
+regular quadrature. `strength_gauss` resolves cheap finite-depth scalar fringes
+and constructs positive physical W du rules per response panel. `pixel_error`
+jointly prepares angular parent/children through `fiber_detector`, compares tiled
+native L1 patches and reuses accepted children. `conditional_detector` contracts
+canonical signed fractions and accumulates compact native windows.
+`continuous_regions` applies original fractional memberships exactly once.
+`native_joint` retains exact completed predictions and bounded pre-projection
+scattering, without a strength-free retained detector response. Local-m0 keeps
+its required physical endpoint chart. Reflectivity owns its named overlap measure;
+native search/accuracy retain covariance, guards and qualification. Migration is
+explicit in [ENGINE_MIGRATION.md](ENGINE_MIGRATION.md). No new dependency or permanent
+assessment harness is introduced.

@@ -4,16 +4,19 @@
 > current assessment policy is [VALIDATION.md](VALIDATION.md). Runtime physical and
 > numerical contracts below remain binding.
 
-## Native response reuse and execution (T34)
+## Native preparation and execution (v18)
 
-The current execution extension is documented in [NATIVE_REFINEMENT.md](NATIVE_REFINEMENT.md).
-`FiberScatteringTransfer` retains physical event state before detector/source-mass pruning;
-`FiberScatteringCache` is a bounded explicit owner keyed by actual quadrature and optical state.
-Projection applies current origins, detector visibility and footprint exactly once.
-`NativeFiberResponse` v2 excludes source mass and contracts current aligned normalized weights.
-No cached survivor mask may determine a new detector candidate's support. A frozen Ewald
-envelope must pass candidate-specific Q and angular coverage checks. Default adaptive rules
-remain available; no response is valid for arbitrary parameter changes.
+The sole regular conditional engine is positive strength-weighted Gaussian axial
+quadrature with native-pixel-error angular refinement. See
+[NATIVE_REFINEMENT.md](NATIVE_REFINEMENT.md) and [ENGINE_MIGRATION.md](ENGINE_MIGRATION.md).
+Every distinct candidate rebuilds physical panels, canonical signed strengths,
+W-dependent nodes/masses and actual-mosaic angular acceptance. Exact completed
+predictions may be reused within their immutable candidate/observable owner.
+`FiberScatteringCache` retains bounded pre-projection state keyed by actual nodes
+and upstream optics. Source weights, origins, visibility and footprints apply
+afresh; no survivor mask determines support. Frozen domains require candidate
+coverage checks and do not freeze strength-dependent rules. The required local-m0
+endpoint chart remains explicit.
 
 `NativeRefinementModel` supplies names, units, a physical binding and exact inactivity rules.
 Built-in Bi/Pb symmetry rules live in those models. Search, observations, instrument binding,
@@ -21,7 +24,7 @@ transport, probability integration and execution checkpoints are shared. Raw pre
 recovery is keyed by full float64 candidate, integer N and declared forward identity;
 optimizer state, residuals and Jacobians are not replayed.
 
-Contract API version: **17**. Trace schema version: **4**. Reference pack version: **1**.
+Contract API version: **18**. Trace schema version: **4**. Reference pack version: **1**.
 
 T44 adds native rectangular-window storage to `DetectorSpatialKernels.integrate_native_pixels`.
 `row_offset` and `column_offset` locate the window without changing pixel coordinates or Gaussian
@@ -41,11 +44,10 @@ edges and marginal tails. Native region rectangles use the same arithmetic and
 preserve their frozen membership weights. Requested order, tail clipping and
 cancellation fallback remain explicit; the spatial default stays 16.
 
-T35 adds explicit fixed-parameter control declarations and an optional local-m0
-axial panel cap. Controls retain the complete physical vector and fixed-value
-provenance; ordinary fits still release every admitted coordinate. The local cap
-inherits the global cap when absent and otherwise overrides only local-m0 quadrature.
-Neither changes physics, result measure, observations, or numerical acceptance gates.
+Fixed-parameter controls retain the complete physical vector and fixed-value
+provenance; ordinary fits release every admitted coordinate. Local-m0 has its own
+named controls and keeps the physical endpoint transform. Neither controls nor
+deterministic preparation qualify a fit.
 
 An optional Gauss-Hermite `NativeSourceDefinition.local_m0_divergence_order` uses
 a separate normalized numerical source rule for stitched `(0,0)`. Bind physical
@@ -869,12 +871,13 @@ projector has one implementation in `SiteDisplacementProfile.tensors_A2`.
 signed axial sheets, independent uniform crystal azimuth, spherical mosaic, wavelength/source
 mass, scalar optics and conditional Gaussian source position on fixed detector-native pixel
 support. The local m0 output is the named empirical Parratt/kinematic composite. Its phase-Q
-conversion and local geometry share the existing detector arithmetic. `NativeFiberResponse`
-retains sparse native region probabilities and continuous cone/attenuation coefficients.
-Strength, mosaic density, film thickness and interface roughness may be recomputed on those
-coefficients while proposal/source/material/basis/geometry/support remain fixed. A changed
-material or basis requires a fresh response. Parallel projection is bounded and consumed in
-the identical serial batch order; no source survivor renormalization occurs.
+conversion and local geometry share the existing detector arithmetic. Regular
+panels carry physical W du masses and canonical S+/W, S-/W fractions through the
+same compiler and factor contraction. Accepted angular child patches are reused;
+compact native windows accumulate into caller images or literal fractional
+observation memberships. Source mass applies once without survivor renormalization.
+Continuous `density_at` uses the same prepared transfers and Gaussian kernels,
+with a separate pointwise/continuous-region qualification obligation.
 
 `fitting.native_observations.NativeFitObservations` freezes net native counts, supported rows and
 the full count covariance plus one background-mode covariance. GLS uses a Cholesky factor on
@@ -925,19 +928,19 @@ and both orientations. N retains its declared single-layer Pb or conventional-ce
 `NativeSourceDefinition` retains the explicit source input at the loader boundary.
 `NativeInstrumentModel` binds eighteen acquisition coordinates with fixed frames and units,
 resamples the conditional source and recomputes candidate optics at actual wavelengths.
-`NativeJointEvaluator` owns bounded explicit response and prediction caches for either
-specimen model. Its geometry key includes source, material, basis and rigid poses;
-film thickness remains an intensity dependency. `NativeMosaicCache` reuses only unchanged
-Gaussian/Lorentzian widths and cone order within one response. `FiberIntegrationRule`
-declares the inner cone order separately from axial and outgoing-angle integration.
+`NativeJointEvaluator` retains at most 64 exact completed predictions and one
+bounded upstream scattering cache. Strength, source, geometry, material and actual
+mosaic changes rebuild dependent preparation. Complete G/L columns prepare both
+pure laws independently, including eta endpoints. A mixed accepted mesh cannot
+qualify an inactive component. `FiberIntegrationRule` declares inner cone order
+separately from axial preparation and outgoing-angle acceptance.
 The same rule declares `stitch_grid_size` (default 513, minimum 257); the fitting
 trace uses that exact grid. `SpecularResult` retains immutable internal-phase and
 zero-phase strengths in the input evaluator's units, and `KinematicScaleSpecularResult`
 retains `zero_strength_A2`. Downstream handoff calculations consume those existing
 values instead of invoking the same structure evaluator repeatedly. Other declared
 observables and handoff-selection equations are unchanged.
-An optional `NativeSpatialRegionProjection` can be reused by the response compiler
-only with its identical frozen observation-projection owner.
+Native projection preserves its immutable observation membership owner.
 
 `native_search` profiles unguarded nonnegative scale in the full supported covariance and
 fits guarded scale as a literal SLSQP nuisance coordinate. It accepts
@@ -976,41 +979,18 @@ and potentially nonsmooth. Identity includes the overlap measure in addition to 
 Both public result types, `SpecularResult` and `KinematicScaleSpecularResult`, retain
 the overlap measure independently of their originating stack or caller.
 
-`FiberIntegrationRule.regular_q_bounds_Ainv` and `local_m0_q_bounds_Ainv` optionally
-freeze conservative Q proposal domains. Each must enclose the actual pooled source-region
-bounds; an insufficient interval raises rather than truncating support. Axial grids then
-remain shared when source row counts change. Low-level coordinate calls without angular
-resolution inputs retain the paired Sobol reference net. Native fit/render calls default to
-`angular_integration="native_panels"`, retaining the axial grid and resolving conditional
-GL8 angular panels against complete detector support. Explicit `"nominal"` uses the
-existing unrefined coordinate proposal through the same engine. It does not substitute
-a nominal source ray or change physical support, measure, weights or qualification
-gates. The mode participates in response identity; see
-[Native refinement](NATIVE_REFINEMENT.md).
-This numerical routing update preserves the physical measure and qualification gates.
-`composite_gauss` uses eight-point Gauss-Legendre axial CDF panels (or the
-requested lower order) and separate quadrature on each merged reachable angular arc.
-Arc masses and proposal densities enter the weights explicitly. Its seed must be zero;
-order refinement supplies comparison evidence. All fields participate in numerical identity.
-For composite quadrature, optional `maximum_axial_panel_width_Ainv` bisects CDF panels
-until their inverse-CDF physical widths satisfy the declared positive scalar cap. It
-adds nodes where proposal stretching leaves wide physical gaps, retaining the same
-normalized PDF, panel masses and immutable shared axial grid. This geometric resolution
-control supplies no error certificate; observed predictions still require convergence checks.
-
-`FiberIntegrationRule.angular_support` defaults to `"q_conditioned_union"` for
-compatibility. `"fixed_union"` uses the union of every source-region angular interval
-throughout that source's complete Q interval. Individual observation Q boundaries no
-longer change the angular quadrature topology. The actual native Gaussian projection
-still owns observation contributions. Native observation memberships, physical factors
-and the integration measure remain unchanged; quadrature nodes, proposal densities and
-quadrature weights can change.
-This prevents artificial axial jumps caused by angular remeshing. It does not establish
-angular resolution, and geometry changes can still change the conservative union.
-`FiberIntegrationRule.local_m0_angular_power` optionally overrides the global
-angular order for the local-lamella m0 channel. `None` inherits `angular_power`;
-explicit values are nonnegative integers and participate in numerical identity.
-The same continuous domain and integration measure apply to both channels.
+`FiberIntegrationRule.regular_q_bounds_Ainv` and `local_m0_q_bounds_Ainv` may
+freeze conservative domains enclosing actual pooled source/region support.
+Insufficient coverage raises. Regular integration has no ordinary-engine selector,
+manual axial mesh or fallback. `strength_gauss_order` defaults to four; discrete
+moment checks do not establish continuous axial accuracy. `pixel_error_rtol` and
+`pixel_error_atol` control tiled native L1 parent/child indicators, allocating
+absolute tolerance over all source/group/response-panel slots. Work, depth and
+live patch-memory guards raise without claiming a qualified prefix. Spatial order
+stays 16. Local-m0 retains explicit axial/Sobol and native-resolution angular
+controls. Physical inputs, actual/proposal mosaic, strength revision and numerical
+controls participate in detector identity. Schema v1 requires explicit migration;
+old qualifications/checkpoints cannot carry forward.
 
 Native result schema v2 separates `optimizer_candidate` from `selected`. By default,
 `require_initial_qualification=True` stops requested fitting/profiling after a failed
@@ -1029,10 +1009,7 @@ can be shared between observations, but each original membership weight applies 
 The same continuous Gaussian rectangle integral supplies the probability. This is an
 internal partition change with no new result measure, raster or public API.
 
-The optional numerical acceleration boundary is specified in
-`NATIVE_REFINEMENT.md`: immutable rod-keyed `AxialPanelMesh` physical GL8 panels,
-raw panel-resolved native predictions, explicit one-N stencil preparation, and
-exact-checked reference-correction warm starts. Meshes participate in detector
-revision and response-cache identity. Preparation and approximate proposals cannot
-select fits or supply exact recovery rows. Independent source/angular/axial checks
-remain mandatory. No physical measure, symmetry assumption or dependency changes.
+The optional reference-correction warm start remains specified in
+`NATIVE_REFINEMENT.md`. Low/high rules both use the sole current engine.
+Approximate proposals cannot select fits or supply exact recovery rows. Existing
+physical acceptance and independent source/angular/axial checks remain binding.
