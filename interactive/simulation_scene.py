@@ -13,8 +13,10 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
     QScrollArea,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -65,17 +67,34 @@ class SimulatorScene(ExperimentScenePanel):
         ):
             self.camera.addItem(label, name)
         self.camera.activated.connect(lambda: self.view.preset(self.camera.currentData()))
-        camera.addWidget(self.camera, 1)
+        self.camera.hide()
+        camera.addWidget(QLabel("Apparatus"), 1)
         reset = QPushButton("Reset")
         reset.setToolTip("Restore the experiment camera; view only")
         reset.clicked.connect(lambda: self.view.preset("context"))
-        camera.addWidget(reset)
+        reset.hide()
         self.focus_button = QPushButton("Focus")
         self.focus_button.setToolTip("Frame the selected device; view only")
         self.focus_button.clicked.connect(self.focus_device)
-        camera.addWidget(self.focus_button)
+        self.focus_button.hide()
         self.maximize_button = QPushButton("Maximize")
-        camera.addWidget(self.maximize_button)
+        self.maximize_button.hide()
+        self.view_button = QToolButton()
+        self.view_button.setText("&View")
+        self.view_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.view_menu = QMenu(self.view_button)
+        for index in range(self.camera.count()):
+            name = self.camera.itemData(index)
+            self.view_menu.addAction(
+                self.camera.itemText(index), lambda _checked=False, n=name: self.view.preset(n)
+            )
+        self.view_menu.addSeparator()
+        self.view_menu.addAction("Reset camera", reset.click)
+        self.view_menu.addAction("Focus selected component", self.focus_button.click)
+        self.view_menu.addAction("Focus apparatus / restore workspace", self.maximize_button.click)
+        self.view_menu.addAction("Apparatus help / exact motor order", simulator.show_details)
+        self.view_button.setMenu(self.view_menu)
+        camera.addWidget(self.view_button)
         self.layout().insertLayout(0, camera)
         self.hint.hide()
         self.hint.setToolTip(
@@ -99,19 +118,45 @@ class SimulatorScene(ExperimentScenePanel):
             ]
         )
         self.devices.setToolTip("All devices and secondary declarations")
-        self.layout().addWidget(self.devices)
+        self.inspector = QWidget()
+        inspector_layout = QVBoxLayout(self.inspector)
+        inspector_layout.setContentsMargins(0, 0, 0, 0)
+        self.inspector_scroll = QScrollArea()
+        self.inspector_scroll.setWidgetResizable(True)
+        self.inspector_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.inspector_scroll.setWidget(self.inspector)
+        self.layout().addWidget(self.inspector_scroll)
+        selected = QHBoxLayout()
+        selected.addWidget(self.devices, 1)
+        self.undo_button, self.redo_button = QToolButton(), QToolButton()
+        for button, text, undo in (
+            (self.undo_button, "Undo", True),
+            (self.redo_button, "Redo", False),
+        ):
+            button.setText(text)
+            button.setAccessibleName(text + " simulator parameter edit")
+            button.clicked.connect(lambda _checked=False, u=undo: simulator.history_step(u))
+            selected.addWidget(button)
+        inspector_layout.addLayout(selected)
+        self._selected_device = None
         self.incidence = QLabel("Mean-ray incidence: current geometry unavailable")
         self.incidence.setWordWrap(True)
-        self.layout().addWidget(self.incidence)
+        self.incidence.setToolTip(
+            "Derived from the current declared geometry; not an editable motor coordinate."
+        )
         self.motor_order = QLabel()
         self.motor_order.setWordWrap(True)
-        self.layout().addWidget(self.motor_order)
+        self.motor_order.hide()
         self.pinned_mosaic = QWidget()
         self.pinned_layout = QGridLayout(self.pinned_mosaic)
         self.pinned_layout.setContentsMargins(0, 0, 0, 0)
         self.pinned_controls = {}
         self._pinned_keys = ()
-        self.layout().addWidget(self.pinned_mosaic)
+        self.mosaic_button = QToolButton()
+        self.mosaic_button.setCheckable(True)
+        self.mosaic_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.mosaic_button.setAccessibleName("Mosaic values and exact controls")
+        self.mosaic_button.toggled.connect(self.pinned_mosaic.setVisible)
         self.parameter = QComboBox()
         self.parameter.setAccessibleName("Selected device parameter")
         self.parameter.setSizeAdjustPolicy(
@@ -123,21 +168,20 @@ class SimulatorScene(ExperimentScenePanel):
         self.fields_layout.setContentsMargins(0, 0, 0, 0)
         self.common_controls = {}
         self._common_keys = ()
-        self.fields_scroll = QScrollArea()
-        self.fields_scroll.setWidgetResizable(True)
-        self.fields_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.fields_scroll.setWidget(self.fields)
-        self.layout().addWidget(self.fields_scroll)
+        inspector_layout.addWidget(self.fields)
+        inspector_layout.addWidget(self.incidence)
+        inspector_layout.addWidget(self.mosaic_button)
+        inspector_layout.addWidget(self.pinned_mosaic)
         fine_row = QHBoxLayout()
         self.fine_button = QPushButton("Fine adjust / more")
         self.fine_button.setCheckable(True)
         fine_row.addWidget(self.fine_button)
-        undo, redo = QPushButton("Undo"), QPushButton("Redo")
-        undo.clicked.connect(lambda: simulator.history_step(True))
-        redo.clicked.connect(lambda: simulator.history_step(False))
-        fine_row.addWidget(undo)
-        fine_row.addWidget(redo)
-        self.layout().addLayout(fine_row)
+        self.advanced_button = QToolButton()
+        self.advanced_button.setText("Advanced")
+        self.advanced_button.clicked.connect(simulator.advanced.show)
+        fine_row.addWidget(self.advanced_button)
+        fine_row.addStretch()
+        inspector_layout.addLayout(fine_row)
         self.fine = QWidget()
         fine_layout = QVBoxLayout(self.fine)
         fine_layout.setContentsMargins(0, 0, 0, 0)
@@ -153,12 +197,13 @@ class SimulatorScene(ExperimentScenePanel):
         row.addWidget(label)
         row.addWidget(self.step)
         fine_layout.addLayout(row)
-        self.layout().addWidget(self.fine)
+        inspector_layout.addWidget(self.fine)
         self.fine.hide()
         self.fine_button.toggled.connect(self.fine.setVisible)
-        self.note = QLabel("Load a draft through Menu > Advanced parameters.")
+        self.note = QLabel("Load a draft through Project > Advanced parameters.")
         self.note.setWordWrap(True)
-        self.layout().addWidget(self.note)
+        inspector_layout.addWidget(self.note)
+        self.note.hide()
         self.step.editingFinished.connect(self.set_step)
         self.devices.currentTextChanged.connect(self.select)
         self.parameter.currentIndexChanged.connect(self.select_parameter)
@@ -181,6 +226,7 @@ class SimulatorScene(ExperimentScenePanel):
             self.view.keyboard_step = value
         except ValueError as exc:
             self.note.setText(str(exc))
+            self.note.show()
 
     def sync(self):
         draft = self.simulator.active_draft
@@ -353,7 +399,11 @@ class SimulatorScene(ExperimentScenePanel):
                 target = "Crystal / material"
             elif group == "Incident angle / Geometry":
                 target = f"Axis {indices[0] + 1}" if path[-1] == "axis_rotations" else "Sample"
-            if target == device or (device == "Mount" and target == "Sample"):
+            if (
+                target == device
+                or (device == "Mount" and target == "Sample")
+                or (device == "Sample" and target == "Crystal / material")
+            ):
                 result.append(entry)
         if s.draft_kind.currentData() == "configured" and s._mapping is not None:
             instrument = s._mapping["instrument"]
@@ -387,6 +437,9 @@ class SimulatorScene(ExperimentScenePanel):
         return result
 
     def select(self, *_):
+        if self._selected_device != self.devices.currentText():
+            self._selected_device = self.devices.currentText()
+            self.mosaic_button.setChecked(self._selected_device in ("Sample", "Mosaic"))
         old = self._key
         self._entries = self.entries()
         self._syncing = True
@@ -449,6 +502,7 @@ class SimulatorScene(ExperimentScenePanel):
         ):
             note = "Native LAB sample pose; no separately declared mount or motor chain. See Advanced parameters."
         self.note.setText(note)
+        self.note.hide()
 
         if available:
             _key, _group, label, unit, value, integer, probability = self._entries[index]
@@ -498,6 +552,8 @@ class SimulatorScene(ExperimentScenePanel):
                 for e in entries
                 if e[0][0][-1] in ("spatial_sigma_m", "divergence_sigma_rad", "mean_wavelength_A")
             ]
+        elif device == "Mosaic":
+            entries = []
         elif device == "Detector":
             entries = [
                 e
@@ -527,11 +583,13 @@ class SimulatorScene(ExperimentScenePanel):
                     label.removeprefix("Sample offset ")
                     .removeprefix("Detector ")
                     .removeprefix("Beam origin ")
+                    .replace("Spatial standard deviations", "Spatial sigma")
+                    .replace("Divergence standard deviations", "Divergence sigma")
                 )
                 if device.startswith("Axis "):
                     short = f"{device} motor angle"
                 caption = QLabel(f"{short} ({unit})")
-                caption.setWordWrap(False)
+                caption.setWordWrap(True)
                 caption.setBuddy(field)
                 caption.setToolTip(field.accessibleName())
                 row, col = i, 0
@@ -542,20 +600,16 @@ class SimulatorScene(ExperimentScenePanel):
                 self.common_controls[key] = field
         for key, _group, _label, _unit, value, integer, _probability in entries:
             self.common_controls[key].setText(str(value) if integer else repr(float(value)))
-        self.fields_scroll.setVisible(bool(entries))
-        if entries:
-            rows = len(entries)
-            row_height = max(field.sizeHint().height() for field in self.common_controls.values())
-            height = min(
-                180, rows * row_height + (rows - 1) * self.fields_layout.verticalSpacing() + 8
-            )
-            self.fields_scroll.setFixedHeight(height)
+        self.fields.setVisible(bool(entries))
+        self.inspector_scroll.setMinimumHeight(
+            min(300, max(150, self.inspector.sizeHint().height() + 4))
+        )
 
     def sync_pinned(self):
         s = self.simulator
         matching = self.state is not None and self.current_draft == s.active_draft
         self.incidence.setText(
-            f"Mean-ray incidence {self.state.incidence_deg:.7g}° (derived from current geometry)"
+            f"Mean-ray incidence {self.state.incidence_deg:.7g}° (derived)"
             if matching
             else "Mean-ray incidence: waiting for current geometry"
         )
@@ -583,14 +637,28 @@ class SimulatorScene(ExperimentScenePanel):
                 caption = QLabel(f"{label} ({unit})")
                 caption.setWordWrap(True)
                 caption.setBuddy(field)
-                self.pinned_layout.addWidget(caption, 0, column)
-                self.pinned_layout.addWidget(field, 1, column)
+                self.pinned_layout.addWidget(caption, column, 0)
+                self.pinned_layout.addWidget(field, column, 1)
                 field.committed.connect(lambda text, k=key: s.quick_edit(k, text))
                 self.pinned_controls[key] = field
         for key, _group, _label, _unit, value, integer, _probability in entries:
             self.pinned_controls[key].setText(str(value) if integer else repr(float(value)))
             self.pinned_controls[key].setEnabled(s._drag is None)
-        self.pinned_mosaic.setVisible(bool(entries))
+        values = [f"{float(e[4]):.5g}" for e in entries]
+        units = ["°" if e[3] == "deg" else " " + e[3] for e in entries]
+        self.mosaic_button.setText(
+            "Mosaic · "
+            + (
+                f"sigma {values[0]}{units[0]} · HWHM {values[1]}{units[1]} · fraction {values[2]}"
+                if len(values) == 3
+                else "no separate controls"
+            )
+        )
+        self.mosaic_button.setEnabled(bool(entries))
+        self.pinned_mosaic.setVisible(bool(entries) and self.mosaic_button.isChecked())
+        history = s.native.history if s.draft_kind.currentData() == "native" else s.history
+        self.undo_button.setEnabled(bool(history.undo_actions))
+        self.redo_button.setEnabled(bool(history.redo_actions))
 
     def update_handle(self):
         if (
@@ -679,6 +747,7 @@ class SimulatorScene(ExperimentScenePanel):
                 raise ValueError("Pixel pitch must be positive")
         except ValueError as exc:
             self.note.setText(str(exc))
+            self.note.show()
             return
         self.simulator.quick_edit(self._key, text)
 
@@ -687,8 +756,6 @@ class SimulatorScene(ExperimentScenePanel):
             self.devices.setEnabled(False)
             self.parameter.setEnabled(False)
             self.fields.setEnabled(False)
-            for button in self.device_buttons.values():
-                button.setEnabled(False)
             self.simulator.begin_slider_drag(self._key)
 
     def preview(self, value):

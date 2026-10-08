@@ -20,7 +20,7 @@ from native_simulation_state import (
 from parameter_state import FieldChange, SessionHistory, _action
 from project_state import ProjectFormatError
 from PySide6.QtCore import QPointF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF
+from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -322,9 +322,12 @@ class SimulatorPanel(QWidget):
         self._live_timer.setInterval(300)
         self._live_timer.timeout.connect(self.request_update)
         self.setStyleSheet(
-            "QPushButton, QToolButton { padding: 4px 8px; }"
+            "QPushButton, QToolButton { border: 1px solid transparent; background: transparent; padding: 5px 9px; min-height: 20px; }"
+            "QPushButton:hover, QToolButton:hover { background: #243239; }"
+            "QPushButton#primaryRun { background: #90d5c3; color: #102a25; font-weight: 600; padding: 5px 18px; }"
+            "QLineEdit { background: #1b2329; border: 1px solid #344149; padding: 4px 7px; min-height: 19px; }"
             "QTabBar::tab { padding: 5px 10px; }"
-            "QLineEdit:focus, QComboBox:focus, QPushButton:focus { border: 1px solid #63b9c9; }"
+            "QLineEdit:focus, QComboBox:focus, QPushButton:focus, QToolButton:focus { border: 1px solid #63b9c9; }"
             "QPushButton:checked { background-color: #235562; }"
         )
         self._maximized_view = None
@@ -358,7 +361,8 @@ class SimulatorPanel(QWidget):
         action_layout.addLayout(secondary)
         self.load_button = QPushButton("Load configuration")
         self.validate_button = QPushButton("Validate complete draft")
-        self.run_button = QPushButton("&Run/update")
+        self.run_button = QPushButton("&Run")
+        self.run_button.setObjectName("primaryRun")
         self.inspect_button = QPushButton("Inspect this snapshot")
         self.resume_button = QPushButton("Follow progression")
         self.cancel_button = QPushButton("&Stop")
@@ -387,7 +391,7 @@ class SimulatorPanel(QWidget):
         ):
             actions.addRow(button)
         action_layout.addLayout(actions)
-        controls.insertWidget(3, self.reopen_button)
+        actions.addRow(self.reopen_button)
         transfer_actions = QHBoxLayout()
         self.transfer_target = QComboBox()
         self.transfer_target.addItem("Experiment -> configured draft", "configured")
@@ -548,9 +552,9 @@ class SimulatorPanel(QWidget):
         self.inspection_splitter.setStretchFactor(0, 1)
         self.inspection_splitter.setSizes([520, 210])
         layout.addWidget(self.inspection_splitter, 1)
-        self.inspection_button = QPushButton("&Inspection")
+        self.inspection_button = QPushButton("&Inspect image")
         self.inspection_button.setCheckable(True)
-        self.inspection_button.toggled.connect(self.inspection_scroll.setVisible)
+        self.inspection_button.toggled.connect(self.toggle_inspection)
         controls.insertWidget(4, self.inspection_button)
         self.figures = QCheckBox(
             "Export configured figures using selected output names and directory"
@@ -610,7 +614,97 @@ class SimulatorPanel(QWidget):
         self.detector.view.view_state_changed.connect(self.shell._mark_dirty)
         self.detector.view.view_state_changed.connect(self.scene.texture)
         self.detector.view.display_bin_changed.connect(lambda _bin: self.scene.texture())
+        self.configure_workspace(controls, details)
         self.refresh()
+
+    def configure_workspace(self, controls, details):
+        # Layout and actions reuse the existing widgets and their scientific owners.
+        controls.removeWidget(self.live)
+        controls.insertWidget(1, self.live)
+        controls.removeWidget(details)
+        controls.removeWidget(self.advanced_button)
+        self.advanced_button.setText("&Project")
+        self.project_menu = self.advanced_button.menu()
+        self.project_menu.addAction("Open project…", self.shell._choose_open)
+        self.project_menu.addAction("Save project", self.shell.save_project)
+        self.project_menu.addAction("Save project as…", self.shell.save_project_as)
+        self.project_button_actions = []
+        for label, button in (
+            ("Show saved image (Alt+O)", self.reopen_button),
+            ("Load configuration / native physics…", self.load_button),
+            ("Validate complete draft", self.validate_button),
+            ("Export recorded configuration…", self.save_configuration_button),
+        ):
+            action = self.project_menu.addAction(label, button.click)
+            self.project_button_actions.append((action, button))
+        self.outputs.tabBar().hide()
+        navigation = self.detector.fit_button.parentWidget()
+        contrast = self.detector.auto_button.parentWidget()
+        self.display_button = QToolButton()
+        self.display_button.setText("&Display")
+        self.display_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.display_menu = QMenu(self.display_button)
+        self.display_button.setMenu(self.display_menu)
+        controls.addWidget(self.display_button)
+        controls.addWidget(self.advanced_button)
+        self.display_settings = QDialog(self)
+        self.display_settings.setWindowTitle("Display range and exposure — raw data unchanged")
+        settings = QVBoxLayout(self.display_settings)
+        self.detector.layout().removeWidget(self.display_contrast.range_controls)
+        settings.addWidget(self.display_contrast.range_controls)
+        self.display_contrast.range_controls.show()
+        exposure = QFormLayout()
+        exposure.addRow("Display exposure", self.display_contrast.exposure)
+        settings.addLayout(exposure)
+        self.display_menu.addAction("Exact range / display exposure…", self.display_settings.show)
+        for label, button in (
+            ("1:1 native pixels", self.detector.native_button),
+            ("Zoom box", self.detector.box_button),
+            ("Focus detector / restore workspace", self.detector_maximize),
+        ):
+            self.display_menu.addAction(label, button.click)
+        for button in navigation.findChildren(QPushButton):
+            if button.text() == "Guides":
+                self.display_menu.addAction("Guides", button.click)
+        for index, label in enumerate(("Detector image", "Reciprocal view", "Ewald view")):
+            self.display_menu.addAction(
+                label, lambda _checked=False, i=index: self.outputs.setCurrentIndex(i)
+            )
+        navigation.hide()
+        contrast.hide()
+        toolbar = QWidget()
+        row = QHBoxLayout(toolbar)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(QLabel("Detector"))
+        row.addStretch()
+        self.detector.fit_button.setText("Fit view")
+        for widget in (
+            self.detector.fit_button,
+            self.detector.mode_control,
+            self.detector.auto_button,
+        ):
+            row.addWidget(widget)
+            widget.show()
+        self.detector.layout().addWidget(toolbar, 0, 0, 1, 2)
+        caption = self.display_contrast.legend_note.parentWidget().layout()
+        caption.removeWidget(self.display_contrast.legend_note)
+        measure_row = QHBoxLayout()
+        measure_row.addWidget(self.display_contrast.legend_note, 1)
+        details.setText("Image details")
+        measure_row.addWidget(details)
+        caption.addLayout(measure_row)
+        self.saved_shortcut = QShortcut("Alt+O", self)
+        self.saved_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self.saved_shortcut.activated.connect(self.reopen_button.click)
+        self.advanced_shortcut = QShortcut("Alt+A", self)
+        self.advanced_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self.advanced_shortcut.activated.connect(self.advanced.show)
+
+    def toggle_inspection(self, visible):
+        self.inspection_scroll.setVisible(visible)
+        if visible:
+            height = sum(self.inspection_splitter.sizes())
+            self.inspection_splitter.setSizes([max(200, height - 210), 210])
 
     def maximize_view(self, name):
         if self._maximized_view == name:
@@ -643,7 +737,17 @@ class SimulatorPanel(QWidget):
         lowered = status.lower()
         error = any(
             word in lowered
-            for word in ("failed", "error", "rejected", "invalid", "could not", "cannot")
+            for word in (
+                "failed",
+                "error",
+                "rejected",
+                "invalid",
+                "could not",
+                "cannot",
+                "stale",
+                "unavailable",
+                "conflict",
+            )
         )
         busy = self.shell._active_kind == "simulation" or self.shell._pending_simulation is not None
         if error:
@@ -664,19 +768,14 @@ class SimulatorPanel(QWidget):
             operation = "Stopped"
         else:
             operation = "Ready" if self.active_draft is not None else "No draft"
-        saved_image = (
-            self.native.result_reference
-            if self.draft_kind.currentData() == "native"
-            else self.result_reference
+        self.summary.setText(operation)
+        self.result_state.setText(
+            snapshot_state(self.frame, self.active_draft, held=self.hold, compact=True)
         )
-        image = (
-            "No image — Show saved image" if saved_image is not None else "No image — Run/update"
-        )
-        if self.frame is not None:
-            image = "Current image" if self.frame.draft == self.active_draft else "Historical image"
-            image += " · nominal"
-        self.summary.setText(operation + " · " + image)
-        self.result_state.setText(snapshot_state(self.frame, self.active_draft, held=self.hold))
+        self.result_state.setToolTip(snapshot_state(self.frame, self.active_draft, held=self.hold))
+        self.cancel_button.setVisible(busy or self.live.isChecked() or self._live_timer.isActive())
+        for action, button in self.project_button_actions:
+            action.setEnabled(button.isEnabled())
         self.inspection.sync()
         self.summary.setToolTip(status + "\n" + self.identity.text())
         self.error_banner.setText(status if error else "")
@@ -687,6 +786,8 @@ class SimulatorPanel(QWidget):
                     status,
                     self.identity.text(),
                     self.scene.note.toolTip(),
+                    self.scene.motor_order.text(),
+                    snapshot_state(self.frame, self.active_draft, held=self.hold),
                     self.detector.contrast_note.toolTip(),
                     self.detector.profile_status.text(),
                     self.detector.cursor_label.text(),

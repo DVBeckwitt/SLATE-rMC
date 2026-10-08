@@ -244,11 +244,38 @@ structure declarations. Preview execution uses 64 source samples, four CPU worke
 seed 1729. Detector output is enabled; reciprocal/Ewald outputs and configured figure export
 are off. These are practical starting values, not converged or qualified settings.
 
+The default **Workspace** keeps the detector and apparatus side by side. **Run** is the
+primary action, with **Live** beside it. **Stop** appears while work is pending/running,
+Live is on, or an update timer is active. **Project** contains Open, Save, Save as,
+Show saved image, loading, validation, configuration export and Advanced parameters.
+Use **Alt+O** for the exact saved image and **Alt+A** for Advanced; ordinary project
+shortcuts remain available. Menu/disclosure controls support keyboard focus.
+
+The detector keeps **Fit view**, contrast mode and **Auto 99%** visible. **Display**
+contains exact range/exposure, Full range, 1:1, zoom box, detector focus/restore and
+reciprocal/Ewald views. Guides appear there when the installed source provides them.
+The numerical legend shows actual limits; its caption retains units and display-sum
+bin size. **Image details** exposes the full schema, hashes, clipping/edge-bin policy,
+motor order and status. Completion and qualification are separate recorded facts.
+
+Select one apparatus device to edit its common fields in declared units. Axis controls
+edit the actual motor angle; mean-ray incidence is a derived readout. Sample exposes
+position and existing crystal controls. The **Mosaic** summary opens its exact controls
+in one click and expands in Sample/Mosaic context. The inspector scrolls at compact
+sizes. **Fine adjust / more** and **Advanced** retain secondary controls and the same
+draft/history. Compact Undo/Redo uses that history. Camera presets/reset/focus and
+apparatus guidance are under **View**; camera motion does not change geometry.
+
+**Inspect image** opens a resizable drawer with Hold/Follow, Profiles/ROI, Compare,
+Export and readable provenance. Comparison headings use short names; **Details**
+retains exact frozen identities. Both panes retain one shared bin, contrast mode,
+limits and numerical legend, without per-image normalization.
+
 Fresh entry validates the starter and requests one canonical diffraction pattern automatically,
 with **Live off**. **Stop**, leaving Simulator, or Open/Close cancels that one-time request;
-returning to the tab does not restart it. Subsequent calculations use **Run/update** or explicit
+returning to the tab does not restart it. Subsequent calculations use **Run** or explicit
 **Live**. Existing/custom/recovered projects retain their declarations. **Show saved image**
-reopens the exact hashed result without recalculation; image-less drafts use **Run/update**.
+reopens the exact hashed result without recalculation; image-less drafts use **Run**.
 Manual loading, editing run controls or opening another project supersedes a pending default.
 
 Use **Load configuration** to load another supported `rasim-simulation-v2` YAML.
@@ -269,10 +296,10 @@ generic-CIF admission alone does not provide that renderer. Output enablement, C
 and route compatibility are enforced with visible reasons. Backend failures do not select another
 backend. Auxiliary-only routes require detector output to be deselected explicitly.
 
-**Run/update** uses the existing numerical owners and publishes progressive prefixes.
+**Run** uses the existing numerical owners and publishes progressive prefixes.
 Float32 presentation copies are owned separately from sampler leases. Exact cursor and linked
 bands use an immutable float64 quantitative snapshot; previews say **Awaiting quantitative
-snapshot**. **Inspection → Hold snapshot** holds matching image/profiles at the next available boundary;
+snapshot**. **Inspect image → Hold** holds matching image/profiles at the next available boundary;
 **Follow** resumes adoption. Large profile queries wait for the global worker after
 active MC drains. Pixel-center density and macrobin quadrature remain display approximations;
 macrobin indices are labeled, with native center arrays retained in exports. Reciprocal/Ewald

@@ -4419,3 +4419,29 @@ primary row; restored/custom settings are retained and never silently recalculat
 or replaced with the starter. Image-less restored drafts use explicit Run/update.
 Real startup rendering evidence is nominal functionality, not convergence or fit
 qualification. Scientific inputs, sampling, measures and tolerances are unchanged.
+
+
+### Minimalist Simulator Workspace (B036, 2026-10-08)
+
+The approved presentation refinement keeps Workspace as default and reuses existing
+focus/restore. One accented Run sits beside Live; Stop remains available during
+pending/running/timed or Live work. Project/Display/View menus preserve real actions.
+Fit view, mode, Auto and a numerical legend stay visible; concise scientific state
+and units/bin caption lead to complete Image details. Common selected-device fields
+precede derived incidence and a mosaic disclosure; Sample/Mosaic expands exact
+controls in a single scrollable inspector. Fine/Advanced, shared history and gesture
+owners remain. Inspect image opens a resizable drawer; comparison has short headings
+and exact frozen identities in Details, retaining B035 shared sums/mode/limits.
+
+Focused external checks reuse saved images and intercept terminal Run/validation for
+controlled lifecycle assertions. Actual launcher and scoped candidate menu actions,
+exact edits/Undo/Redo/Escape, saved project routes, inspection and comparison ownership
+are checked. Representative 1280x800, 1280x700 and 150% renders are visually inspected.
+The default useful saved-image area improves from 461x461 to 545x545 at DPR1; this
+describes the layout for that input, not a usability or scientific score. Expanded
+inspector overlap, high-DPI field clipping, inspection splitter allocation and an
+obsolete gesture-button reference were repaired. No forward images, fits, sweeps,
+new dependency/framework or repository harness were introduced. Existing acceptance
+counts (25/46 and 5/16), unavailable native fitting and scientific qualification stay
+unchanged. External receipts and source seals: minimal_ui_handoff.md in the task's
+2026/09/28 visualization directory.

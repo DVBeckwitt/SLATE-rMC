@@ -155,6 +155,7 @@ class SimulationContrast(QObject):
             message + "\nChoose valid manual levels or press Auto 99%."
         )
         self.range_button.setChecked(True)
+        self.legend_note.setText("Display error: " + message)
 
     def restore(self, state):
         self.frame = None
@@ -236,16 +237,27 @@ class SimulationContrast(QObject):
             view.contrast_mode,
         )
         self.legend.update()
+        unit = (
+            self.panel.observable_unit.split(" (", 1)[0]
+            .replace("angstrom^2", "Å²")
+            .replace("pixel^2", "px²")
+        )
+        kind = (
+            self.panel.observable_unit.partition(" (")[2]
+            .rstrip(")")
+            .split(",", 1)[0]
+            .split(";", 1)[0]
+        )
         self.legend_note.setText(
-            f"{view.contrast_mode.replace('_', ' ')} · {self.panel.observable_unit}; "
+            f"{unit} {kind} · "
             + (
                 "native cells"
                 if level.bin_size == 1
-                else f"display cell = sum of {level.bin_size} x {level.bin_size} native cells (edges may be smaller)"
+                else f"{level.bin_size} x {level.bin_size} display sum"
             )
-            + f" · ~{clipped:.1f}% of positive display cells above Upper{negative}{tiny}"
-            + (f" · {level.invalid_count} invalid cells" if level.invalid_count else "")
+            + (f" · {level.invalid_count} invalid bins" if level.invalid_count else "")
         )
+        self.legend_note.setToolTip(description)
         self.panel.contrast_note.setToolTip(
             description
             + "\n"

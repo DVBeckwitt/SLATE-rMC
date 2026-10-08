@@ -5,7 +5,7 @@ import json
 import yaml
 from detector_panel import DetectorTextureView
 from project_state import validate_display_limits
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -24,9 +24,13 @@ from simulation_state import SimulationDraft
 from simulation_widgets import NumberEdit
 
 
-def snapshot_state(frame, current_draft, *, held=False):
+def snapshot_state(frame, current_draft, *, held=False, compact=False):
     if frame is None:
-        return "No detector snapshot; Run/update or Show saved image"
+        return (
+            "No detector snapshot · Run or Project > Show saved image"
+            if compact
+            else "No detector snapshot; Run/update or Show saved image"
+        )
     manifest = json.loads(frame.manifest)
     relation = "Inputs match draft" if frame.draft == current_draft else "Historical inputs"
     precision = "Quantitative snapshot" if frame.quantitative else "Presentation preview"
@@ -45,6 +49,33 @@ def snapshot_state(frame, current_draft, *, held=False):
     else:
         progress += f" · recorded batches/prefix {frame.draw_prefix}"
     qualification = manifest.get("qualification", "Qualification unrecorded")
+    if compact:
+        declared = str(qualification).split(";", 1)[0].strip().lower()
+        qualification = (
+            "Unqualified"
+            if declared in ("nominal", "unqualified")
+            else "Qualified"
+            if declared == "qualified"
+            else "Qualification unknown"
+        )
+        progress = (
+            "Complete"
+            if complete is True
+            else "Partial"
+            if complete is False
+            else "Completion unknown"
+        )
+        if isinstance(frame.draft, SimulationDraft) and frame.draft.route == "monte_carlo":
+            progress += f" · draws {frame.draw_prefix}/{frame.draft.draw_count}"
+        elif complete is False:
+            progress += f" · batches {frame.draw_prefix}"
+        return (
+            ("Current" if frame.draft == current_draft else "Historical")
+            + (" · Quantitative" if frame.quantitative else " · Preview")
+            + (" · no detector output" if frame.image is None else "")
+            + f" · {progress} · {qualification}"
+            + (" · Held" if held else "")
+        )
     return (
         f"{relation} · {precision} · {progress}"
         + (" · Held" if held else "")
@@ -96,7 +127,7 @@ class SnapshotInspection(QWidget):
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         actions = QHBoxLayout()
-        simulator.inspect_button.setText("&Hold snapshot")
+        simulator.inspect_button.setText("&Hold")
         simulator.resume_button.setText("&Follow")
         for button in (
             simulator.inspect_button,
@@ -105,6 +136,8 @@ class SnapshotInspection(QWidget):
             simulator.export_button,
         ):
             actions.addWidget(button)
+        simulator.profile_controls_button.setText("Profiles / ROI")
+        simulator.export_button.setText("Export snapshot")
         self.compare_button = QPushButton("Compare saved result")
         self.compare_button.clicked.connect(self.choose_reference)
         actions.addWidget(self.compare_button)
@@ -142,7 +175,8 @@ class SnapshotInspection(QWidget):
         reason = "Exact profiles/ROI and export use this quantitative snapshot."
         if not quantitative:
             reason = "Exact profiles/ROI/export unavailable until a quantitative snapshot is received; preview readout is presentation only."
-        self.availability.setText(
+        self.availability.setText(reason)
+        self.availability.setToolTip(
             reason
             + " Comparison requires the same declared measure, detector geometry/frame and sample support; no alignment or normalization."
         )
@@ -262,6 +296,7 @@ class SnapshotInspection(QWidget):
             ("Auto 99%", self.apply_comparison_limits),
             ("Full range", lambda: self.apply_comparison_limits(full=True)),
             ("Fit both", self.fit_comparison),
+            ("Details", self.show_comparison_details),
         ):
             button = QPushButton(label)
             button.clicked.connect(lambda _checked=False, a=action: a())
@@ -273,7 +308,10 @@ class SnapshotInspection(QWidget):
         for label, current in (("Displayed", self.compared_frame), ("Reference", frame)):
             pane = QWidget()
             column = QVBoxLayout(pane)
-            caption = QLabel(f"{label}: {current.run_id}; prefix {current.draw_prefix}")
+            caption = QLabel(f"{label} snapshot · recorded prefix {current.draw_prefix}")
+            caption.setToolTip(
+                f"Run {current.run_id}; draft {current.draft.draft_id}, revision {current.draft.revision}"
+            )
             caption.setWordWrap(True)
             column.addWidget(caption)
             detector = DetectorTextureView()
@@ -419,6 +457,41 @@ class SnapshotInspection(QWidget):
             f"{self.compared_frame.measure}\nShared {mode} [{low:.7g}, {high:.7g}] in sums of {size} x {size} native display cells ({unit}; edge bins may be smaller).\n"
             f"Binning fixed across resize/zoom; scale anchor: {anchor}. No per-image normalization. Raw native arrays/identities unchanged."
         )
+
+    def show_comparison_details(self):
+        if self.comparison_dialog is None:
+            return
+        dialog = QDialog(self.comparison_dialog)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        dialog.setWindowTitle("Frozen comparison identities and display details")
+        dialog.resize(720, 480)
+        text = QPlainTextEdit()
+        text.setReadOnly(True)
+        text.setPlainText(
+            json.dumps(
+                {
+                    "displayed_identity": {
+                        "run_id": str(self.compared_frame.run_id),
+                        "draft_id": str(self.compared_frame.draft.draft_id),
+                        "revision": self.compared_frame.draft.revision,
+                    },
+                    "reference_identity": {
+                        "run_id": str(self.reference.run_id),
+                        "draft_id": str(self.reference.draft.draft_id),
+                        "revision": self.reference.draft.revision,
+                    },
+                    "displayed_snapshot": json.loads(self.compared_frame.manifest),
+                    "reference_snapshot": json.loads(self.reference.manifest),
+                    "shared_display_limits": self.comparison_limits,
+                    "shared_sum_bin": self.comparison_bin.currentData(),
+                    "display_policy": "Fixed common sums; edge bins may be partial; no per-image normalization. Exact native data is unchanged.",
+                },
+                indent=2,
+            )
+        )
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(text)
+        dialog.show()
 
     def fit_comparison(self):
         for view in self.comparison_views:

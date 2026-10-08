@@ -1357,8 +1357,16 @@ order, owner/unit/scope, fixed/gauge definitions, physical bounds and final-stag
 remain authoritative. Native execution/results remain unavailable; complete covariance is
 retained by its existing owner. Review actions do not adopt new geometry into frozen inputs.
 
-The desktop Simulator offers one primary Live/Run-update/Stop/Advanced toolbar and a
-scrollable, resizable parameter sidebar. Quick controls write through the existing
+The desktop Simulator defaults to the side-by-side Workspace with one primary Run
+action, adjacent Live and Stop visible during pending/running/timed or Live work.
+Project, Display and apparatus View menus reuse existing action owners. Exact saved
+image and Advanced have direct Alt+O/Alt+A routes. Common selected-device fields precede
+derived incidence and a one-click mosaic summary; Sample/Mosaic expands exact mosaic
+controls. One scrollable inspector keeps fields readable at compact/scaled sizes.
+The compact scientific line retains history, preview/quantitative, declared completion
+and qualification; full schemas/hashes/edge-bin/clipping details remain inspectable.
+Inspection disclosure allocates a resizable pane; short comparison headings keep exact
+frozen identities in Details and preserve B035 common-bin/limits/resource ownership. Quick controls write through the existing
 configured/native schema editors to the same immutable draft and bounded undo history.
 A slider drag commits on release; numeric text pauses coalesce after 300 ms. Exact
 numeric text is authoritative. Slider span and step are user navigation settings,
@@ -1382,7 +1390,7 @@ First visits admit the existing starter and request one diffraction pattern thro
 the canonical update worker, with Live off. Stop, leaving or Open consumes/cancels
 this startup request; repeated visits never restart it. Saved/imported/recovered
 projects retain exact settings and Live off. Show saved image reopens a bound snapshot
-by its exact hash; image-less drafts use Run/update without replacement by defaults. Validation failure does not retry unchanged
+by its exact hash; image-less drafts use Run without replacement by defaults. Validation failure does not retry unchanged
 input. The last genuine image stays historical while updating; profiles/export metadata
 remain bound to that displayed frame. Live performs no automatic configured figure
 export and preserves the explicit export preference. Defaults remain nominal 64 source
