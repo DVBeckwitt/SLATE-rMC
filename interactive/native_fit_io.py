@@ -213,7 +213,7 @@ def _validate_plan(plan, observations, definition):
         n for n in names if n not in fixed
     ):
         raise ValueError("Final stage order must preserve the declared free roster")
-    return "Draft search fields structurally checked; full engine launch admission unavailable (R4)"
+    return "Draft search fields structurally checked; native fit execution and full launch admission are unavailable in this build"
 
 
 def _load(physics_path, observation_path, plan, plan_path, control, storage=()):

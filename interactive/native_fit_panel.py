@@ -8,6 +8,7 @@ from native_fit_state import native_fit_session_document, reuse_plan, stage_revi
 from parameter_state import MAX_HISTORY_BYTES, FieldChange, HistoryAction, SessionHistory
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -15,6 +16,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
     QScrollArea,
     QSpinBox,
@@ -35,7 +38,7 @@ class NativeFitPanel(QDialog):
         self.epoch, self._rendering = 0, False
         self.profile_description_sha256 = None
         self.history = SessionHistory()
-        self.setWindowTitle("Prepared native inputs / draft plan")
+        self.setWindowTitle("Prepare a fit — inputs, geometry and staged plan")
         self.resize(1150, 800)
         layout = QVBoxLayout(self)
         self.status = QLabel(
@@ -43,6 +46,9 @@ class NativeFitPanel(QDialog):
         )
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
+        self.readiness = QLabel("Inputs → Exclusions → Geometry review → Model / stages → Results")
+        self.readiness.setWordWrap(True)
+        layout.addWidget(self.readiness)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
         page = QWidget()
@@ -71,7 +77,7 @@ class NativeFitPanel(QDialog):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(page)
-        self.tabs.addTab(scroll, "Inputs / provenance")
+        self.tabs.addTab(scroll, "1 · Inputs")
         page = QWidget()
         body = QVBoxLayout(page)
         self.profile_view = NativeProfilesView()
@@ -92,7 +98,17 @@ class NativeFitPanel(QDialog):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(page)
-        self.tabs.addTab(scroll, "Measured profiles / covariance")
+        self.tabs.addTab(scroll, "2 · Exclusions / counts")
+        page = QWidget()
+        geometry = QVBoxLayout(page)
+        self.geometry_review = QLabel()
+        self.geometry_review.setWordWrap(True)
+        geometry.addWidget(self.geometry_review)
+        self.button(geometry, "Review acquisition exclusions", self.review_exclusions)
+        self.button(geometry, "Review physical geometry", lambda: shell.physical.show())
+        self.button(geometry, "Review joint geometry", lambda: shell.joint.show())
+        geometry.addStretch()
+        self.tabs.addTab(page, "3 · Geometry review")
         page = QWidget()
         body = QVBoxLayout(page)
         self.descriptions = QComboBox()
@@ -119,6 +135,7 @@ class NativeFitPanel(QDialog):
             ]
         )
         self.parameters.itemChanged.connect(self.changed)
+        self.parameters.setMaximumHeight(180)
         body.addWidget(self.parameters)
         self.stages = QTableWidget(0, 6)
         self.stages.setHorizontalHeaderLabels(
@@ -132,6 +149,7 @@ class NativeFitPanel(QDialog):
             ]
         )
         self.stages.itemChanged.connect(self.changed)
+        self.stages.setMaximumHeight(80)
         body.addWidget(self.stages)
         declaration_notice = QLabel(
             "Active lists and historical guards are draft proposals; global fixed/gauge definitions and final stage order are read-only. No execution or native stage-result import."
@@ -141,19 +159,28 @@ class NativeFitPanel(QDialog):
         self.selected_stage = QComboBox()
         self.selected_stage.currentIndexChanged.connect(self.select_stage)
         body.addWidget(self.selected_stage)
+        self.active_parameters = QListWidget()
+        self.active_parameters.setAccessibleName(
+            "Declared active parameters for selected fitting stage"
+        )
+        self.active_parameters.setMinimumHeight(80)
+        self.active_parameters.setMaximumHeight(110)
+        self.active_parameters.itemChanged.connect(self.active_changed)
+        body.addWidget(QLabel("Select free parameters for this stage (declared order retained):"))
+        body.addWidget(self.active_parameters)
+        self.advanced_declarations = QCheckBox("Advanced definitions / raw stage declarations")
+        self.advanced_declarations.toggled.connect(self.show_advanced)
+        body.addWidget(self.advanced_declarations)
         self.stage_details = QTextBrowser()
         body.addWidget(self.stage_details)
         self.step = QLineEdit()
         self.step.editingFinished.connect(self.changed)
         body.addWidget(self.step)
         actions = (
-            ("Commit displayed draft", self.commit),
-            ("Discard pending edits", self.discard),
             ("Undo", lambda: self.undo(True)),
             ("Redo", lambda: self.undo(False)),
             ("Reuse compatible historical starts", self.reuse),
             ("Remove displayed historical description", self.remove_history),
-            ("Export committed plan", self.export),
             ("Export exact measured data", self.export_profiles),
         )
         for index, (text, action) in enumerate(actions):
@@ -161,7 +188,7 @@ class NativeFitPanel(QDialog):
                 row = QHBoxLayout()
                 body.addLayout(row)
             self.button(row, text, action)
-        run = QPushButton("Run unavailable - pending R4 engine integration")
+        run = QPushButton("Native fit execution unavailable in this build")
         run.setEnabled(False)
         run.setToolTip(
             "Draft parsing is not full engine launch admission; indexed adoption is unavailable"
@@ -170,9 +197,38 @@ class NativeFitPanel(QDialog):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(page)
-        self.tabs.addTab(scroll, "Parameters / staged declarations")
+        self.tabs.addTab(scroll, "4 · Model / stages")
+        results = QWidget()
+        result_layout = QVBoxLayout(results)
+        message = QLabel(
+            "No native fit result is admitted in this build. Solver termination, convergence, rank, parameter covariance and qualification are unavailable. Preparation and saved descriptions do not constitute a qualified fit."
+        )
+        message.setWordWrap(True)
+        result_layout.addWidget(message)
+        self.button(
+            result_layout,
+            "Review frozen measured counts / full covariance",
+            lambda: self.tabs.setCurrentIndex(1),
+        )
+        self.button(result_layout, "Export committed plan", self.export)
+        self.button(result_layout, "Export exact measured data", self.export_profiles)
+        result_layout.addStretch()
+        self.tabs.addTab(results, "5 · Results")
+        self.show_advanced(False)
+        primary = QHBoxLayout()
+        self.button(primary, "Commit displayed draft", self.commit)
+        self.button(primary, "Discard pending edits", self.discard)
+        self.button(primary, "Export committed plan", self.export)
+        layout.addLayout(primary)
         self.button(layout, "Cancel file operation", shell._cancel_current)
         self.render()
+
+    def showEvent(self, event):
+        screen = self.screen().availableGeometry()
+        self.resize(
+            min(self.width(), screen.width() - 32), min(self.height(), screen.height() - 48)
+        )
+        super().showEvent(event)
 
     def button(self, layout, text, action):
         button = QPushButton(text)
@@ -271,6 +327,7 @@ class NativeFitPanel(QDialog):
         self.row.setRange(0, 0 if self.profiles is None else len(self.profiles.row_ids) - 1)
         self.inspect_row()
         self.status.setText(value.detail)
+        self.sync_preparation()
 
     def restore(self, session):
         self.session, self.profiles = session, None
@@ -320,6 +377,7 @@ class NativeFitPanel(QDialog):
 
     def item(self, table, row, column, value, editable=False, identity=None):
         item = QTableWidgetItem(str(value))
+        item.setToolTip(str(value))
         item.setData(Qt.UserRole, identity)
         if not editable:
             item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
@@ -342,6 +400,7 @@ class NativeFitPanel(QDialog):
                 self.selected_stage.clear()
                 self.stage_details.clear()
                 self.summary.clear()
+                self.sync_preparation()
                 return
             self.summary.setPlainText(
                 encoded(
@@ -387,7 +446,7 @@ class NativeFitPanel(QDialog):
                 ]
                 reason = (
                     capability["reason"]
-                    or "Loaded search declaration; full coupled domain/gauge admission remains R4"
+                    or "Loaded search declaration; native launch admission is unavailable in this build"
                 )
                 values = [
                     p["name"],
@@ -399,7 +458,9 @@ class NativeFitPanel(QDialog):
                     p["upper"],
                     p.get("upper_kind", "search"),
                     p["sensitivity_scale"],
-                    "fixed" if fixed else ", ".join(stages) or "free (no staged declaration)",
+                    "fixed"
+                    if fixed
+                    else "free · " + (", ".join(stages) or "no staged declaration"),
                     reason,
                 ]
                 for col, text in enumerate(values):
@@ -473,6 +534,8 @@ class NativeFitPanel(QDialog):
                 edits.get("step", str(plan.get("finite_difference_step", "Not declared")))
             )
             self.parameters.resizeColumnsToContents()
+            self.show_advanced(self.advanced_declarations.isChecked())
+            self.sync_preparation()
         finally:
             self._rendering = rendering
 
@@ -493,6 +556,145 @@ class NativeFitPanel(QDialog):
                     )
                 )
             )
+            self.sync_preparation()
+
+    def review_exclusions(self):
+        self.shell.workspaces.setCurrentIndex(0)
+        self.shell.scene_tabs.setCurrentIndex(0)
+        self.status.setText(
+            "Review exclusions on the acquisition detector. Loaded prepared rows/covariance remain frozen; changed exclusions require a separately admitted preparation recipe."
+        )
+
+    def show_advanced(self, shown):
+        for column in (5, 7, 8, 10):
+            self.parameters.setColumnHidden(column, not shown)
+        self.stages.setColumnHidden(1, not shown)
+        self.stage_details.setVisible(shown)
+        self.step.setVisible(shown)
+        if not shown:
+            for column, width in (
+                (0, 230),
+                (1, 145),
+                (2, 75),
+                (3, 110),
+                (4, 110),
+                (6, 110),
+                (9, 155),
+            ):
+                self.parameters.setColumnWidth(column, width)
+        self.parameters.setHorizontalHeaderLabels(
+            [
+                "Scientific parameter",
+                "Owner / scope",
+                "Unit",
+                "Initial",
+                "Lower",
+                "Lower kind",
+                "Upper",
+                "Upper kind",
+                "Sensitivity scale",
+                "Fixed / stage active",
+                "Support / constraint",
+            ]
+        )
+
+    def sync_preparation(self):
+        value = self.displayed()
+        if value is None:
+            self.readiness.setText(
+                "Inputs required: load physics, observations and a plan. Native execution unavailable."
+            )
+            self.geometry_review.setText(
+                "No prepared geometry declaration. Review acquisition geometry through its existing owner; no default calibration is assumed."
+            )
+            self.active_parameters.clear()
+            return
+        self.readiness.setText(
+            "Inputs: recorded · Exclusions/counts: frozen"
+            + (
+                " arrays inspected"
+                if self.profiles is not None
+                else " arrays unverified — inspect/reload"
+            )
+            + " · Geometry: review bound declaration · Plan: "
+            + ("pending edits" if self.session.draft_json is not None else "committed draft")
+            + " · Execution/results: unavailable"
+        )
+        self.geometry_review.setText(
+            f"Prepared projection {value['inputs']['projection_revision']}\nPhysics {value['inputs']['physics_sha256']}\nThe loaded input geometry stays bound to this description. Geometry review does not adopt a new calibration into frozen observations. Review the source declarations in Inputs; covariance and native memberships are unchanged."
+        )
+        name = self.selected_stage.currentData()
+        row = next(
+            (
+                r
+                for r in range(self.stages.rowCount())
+                if self.stages.item(r, 0).data(Qt.UserRole) == name
+            ),
+            None,
+        )
+        self.active_parameters.blockSignals(True)
+        try:
+            self.active_parameters.clear()
+            if row is None:
+                return
+            try:
+                active = json.loads(self.stages.item(row, 1).text())
+                if not isinstance(active, list) or any(type(v) is not str for v in active):
+                    raise ValueError("Invalid active parameter declaration; correct it in Advanced")
+            except (ValueError, TypeError) as exc:
+                self.status.setText(str(exc))
+                return
+            editable = bool(self.stages.item(row, 1).flags() & Qt.ItemIsEditable)
+            fixed = value["plan"].get("fixed_parameters", {})
+            for p, capability in zip(
+                value["plan"]["parameters"], value["definition"]["capabilities"], strict=True
+            ):
+                item = QListWidgetItem(
+                    f"{p['name']} [{p['unit']}] · {p['owner']}"
+                    + (" · fixed" if p["name"] in fixed else "")
+                )
+                item.setData(Qt.UserRole, p["name"])
+                item.setCheckState(
+                    Qt.CheckState.Checked if p["name"] in active else Qt.CheckState.Unchecked
+                )
+                if not editable or p["name"] in fixed or capability["reason"]:
+                    item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                else:
+                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setToolTip(
+                    capability["reason"]
+                    or (
+                        "Final stage order and global fixed/gauge definitions are read-only"
+                        if not editable
+                        else "Draft selection; full launch admission remains unavailable"
+                    )
+                )
+                self.active_parameters.addItem(item)
+        finally:
+            self.active_parameters.blockSignals(False)
+
+    def active_changed(self, item):
+        if self._rendering or self.session is None:
+            return
+        name = self.selected_stage.currentData()
+        row = next(
+            r
+            for r in range(self.stages.rowCount())
+            if self.stages.item(r, 0).data(Qt.UserRole) == name
+        )
+        cell = self.stages.item(row, 1)
+        if not cell.flags() & Qt.ItemIsEditable:
+            return
+        previous = json.loads(cell.text())
+        selected = [
+            self.active_parameters.item(i).data(Qt.UserRole)
+            for i in range(self.active_parameters.count())
+            if self.active_parameters.item(i).checkState() == Qt.CheckState.Checked
+        ]
+        ordered = [v for v in previous if v in selected] + [
+            v for v in selected if v not in previous
+        ]
+        cell.setText(encoded(ordered))
 
     def changed(self, *_):
         if self._rendering or self.session is None or self.descriptions.currentData() != 0:
@@ -536,6 +738,8 @@ class NativeFitPanel(QDialog):
                     )
                 )
             )
+
+        self.sync_preparation()
 
     def plan_from_edits(self):
         plan = json.loads(self.session.current_json)["plan"]

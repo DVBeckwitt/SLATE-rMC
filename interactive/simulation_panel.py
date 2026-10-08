@@ -47,6 +47,7 @@ from PySide6.QtWidgets import (
 from simulation_contrast import SimulationContrast
 from simulation_dashboard import SimulationDashboard
 from simulation_fields import SIMULATION_FIELDS
+from simulation_inspection import SnapshotInspection, snapshot_state
 from simulation_io import SimulationFrame
 from simulation_scene import SimulatorScene
 from simulation_scene_io import SimulatorGeometry
@@ -371,7 +372,6 @@ class SimulatorPanel(QWidget):
         controls.addWidget(details)
         controls.addWidget(self.advanced_button)
         secondary.addRow(self.load_button, self.validate_button)
-        secondary.addRow(self.inspect_button, self.resume_button)
         layout.addLayout(controls)
         actions = QFormLayout()
         self.undo_button = QPushButton("Undo draft")
@@ -384,7 +384,6 @@ class SimulatorPanel(QWidget):
             self.undo_button,
             self.redo_button,
             self.save_configuration_button,
-            self.export_button,
         ):
             actions.addRow(button)
         action_layout.addLayout(actions)
@@ -467,7 +466,17 @@ class SimulatorPanel(QWidget):
             control.parentWidget().show()
         self.detector.observable_unit = "angstrom^2 (simulation mass, not experimental counts)"
         self.detector.quantitative_ready = False
+        detector_page = QWidget()
+        detector_layout = QVBoxLayout(detector_page)
+        detector_layout.setContentsMargins(0, 0, 0, 0)
+        detector_layout.addWidget(self.detector, 1)
         self.display_contrast = SimulationContrast(self.detector)
+        self.result_state = QLabel("No detector snapshot")
+        self.result_state.setWordWrap(True)
+        self.result_state.setAccessibleName("Displayed detector scientific state")
+        detector_layout.insertWidget(0, self.result_state)
+        detector_layout.addWidget(self.display_contrast.legend)
+        detector_layout.addWidget(self.display_contrast.legend_note)
         # Secondary profile controls can scroll instead of compressing button text
         # when detector and scene share a short window at desktop scaling.
         profile_controls = self.detector.pin_center_button.parentWidget()
@@ -493,10 +502,13 @@ class SimulatorPanel(QWidget):
             "Show exact profile position, widths, measure, follow/pin and ROI controls."
         )
         self.profile_controls_button.toggled.connect(self.profile_controls_scroll.setVisible)
-        self.detector.fit_button.parentWidget().layout().addWidget(self.profile_controls_button)
+        self.profile_controls_button.toggled.connect(self.detector.horizontal.setVisible)
+        self.profile_controls_button.toggled.connect(self.detector.vertical.setVisible)
+        self.detector.horizontal.hide()
+        self.detector.vertical.hide()
         for label in self.detector.fit_button.parentWidget().findChildren(QLabel):
             label.hide()
-        self.detector.fit_button.setText("Fit image")
+        self.detector.fit_button.setText("Fit to window")
         self.detector.native_button.setText("1:1")
         self.detector.box_button.setText("Zoom box")
         self.detector.profile_work_required = True
@@ -515,7 +527,7 @@ class SimulatorPanel(QWidget):
         self.detector.export_button.hide()
         self.reciprocal = SimulationScatterView()
         self.ewald = SimulationScatterView()
-        self.outputs.addTab(self.detector, "Detector / exact profiles")
+        self.outputs.addTab(detector_page, "Detector / exact profiles")
         self.outputs.addTab(self.reciprocal, "Reciprocal output")
         self.outputs.addTab(self.ewald, "Ewald output")
         splitter.addWidget(self.outputs)
@@ -524,7 +536,22 @@ class SimulatorPanel(QWidget):
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([650, 530])
         self.dashboard_splitter = splitter
-        layout.addWidget(splitter, 1)
+        self.inspection = SnapshotInspection(self)
+        self.inspection_scroll = QScrollArea()
+        self.inspection_scroll.setWidgetResizable(True)
+        self.inspection_scroll.setWidget(self.inspection)
+        self.inspection_scroll.setMinimumHeight(100)
+        self.inspection_scroll.hide()
+        self.inspection_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.inspection_splitter.addWidget(splitter)
+        self.inspection_splitter.addWidget(self.inspection_scroll)
+        self.inspection_splitter.setStretchFactor(0, 1)
+        self.inspection_splitter.setSizes([520, 210])
+        layout.addWidget(self.inspection_splitter, 1)
+        self.inspection_button = QPushButton("&Inspection")
+        self.inspection_button.setCheckable(True)
+        self.inspection_button.toggled.connect(self.inspection_scroll.setVisible)
+        controls.insertWidget(4, self.inspection_button)
         self.figures = QCheckBox(
             "Export configured figures using selected output names and directory"
         )
@@ -649,6 +676,8 @@ class SimulatorPanel(QWidget):
             image = "Current image" if self.frame.draft == self.active_draft else "Historical image"
             image += " · nominal"
         self.summary.setText(operation + " · " + image)
+        self.result_state.setText(snapshot_state(self.frame, self.active_draft, held=self.hold))
+        self.inspection.sync()
         self.summary.setToolTip(status + "\n" + self.identity.text())
         self.error_banner.setText(status if error else "")
         self.error_banner.setVisible(error)
@@ -987,9 +1016,9 @@ class SimulatorPanel(QWidget):
                 and -90 <= angle <= 90
             )
             label = (
-                "Incident angle (+X rotation, +Y beam)"
+                f"Axis {index + 1} motor angle, LAB {rotation.get('axis_lab')} (matches incidence for this +X/+Y declaration)"
                 if incidence
-                else f"Axis {index + 1} rotation, LAB {rotation.get('axis_lab')}"
+                else f"Axis {index + 1} motor angle, LAB {rotation.get('axis_lab')}"
             )
             add(("instrument", "axis_rotations"), geometry, label, "deg", angle, (index, 3))
         for field in SIMULATION_FIELDS:
@@ -1000,7 +1029,11 @@ class SimulatorPanel(QWidget):
                     value = None
                     break
                 value = value[name]
-            if path[0] == "mosaic" and field.kind == "float":
+            if path[0] == "mosaic" and path[-1] in (
+                "gaussian_sigma_deg",
+                "lorentzian_hwhm_deg",
+                "lorentzian_probability",
+            ):
                 add(
                     path,
                     mosaic,
@@ -1043,6 +1076,8 @@ class SimulatorPanel(QWidget):
                 )
             elif path[0] == "source" and field.kind == "float":
                 add(path, beam, field.label, field.unit, value)
+            elif path[-1] == "film_thickness_A":
+                add(path, sample, field.label, field.unit, value)
             elif path[0] == "structure_factor" and field.kind in ("int", "float"):
                 add(path, sample, field.label, field.unit, value, integer=field.kind == "int")
             elif (path[0] == "numerics" and field.kind == "int") or (
@@ -1053,6 +1088,7 @@ class SimulatorPanel(QWidget):
                     "mosaic.alpha_panel_count",
                     "mosaic.alpha_gauss_order",
                     "mosaic.azimuth_count",
+                    "mosaic.azimuth_phase_deg",
                     "instrument.film_thickness_A",
                 )
             ):
@@ -1927,6 +1963,12 @@ class SimulatorPanel(QWidget):
         return True
 
     def ready(self, operation: str, value, incidence_deg=None) -> None:
+        if operation == "compare_reopen":
+            self.inspection.admit_reference(value)
+            return
+        if operation == "export_launch":
+            self.status.setText(f"Recorded displayed launch exported: {value}")
+            return
         if isinstance(value, SimulatorGeometry):
             self.scene.ready(value)
             return
@@ -2057,6 +2099,8 @@ class SimulatorPanel(QWidget):
     def _clear_detector(self) -> None:
         self.detector.view.set_display_levels(())
         self.display_contrast.frame = None
+        self.display_contrast.legend.hide()
+        self.display_contrast.legend_note.setText("No detector output; display legend unavailable")
         if self.detector.view.image is not None:
             self.detector._reset_profile_state(None)
         self.detector.view.image = self.detector.view._display = None
@@ -2080,6 +2124,7 @@ class SimulatorPanel(QWidget):
             self.shell._pending_simulation = None
 
     def restore(self, view, detail: str = "") -> None:
+        self.inspection.clear_comparison()
         self.stop_live()
         self._last_requested = None
         self.epoch += 1

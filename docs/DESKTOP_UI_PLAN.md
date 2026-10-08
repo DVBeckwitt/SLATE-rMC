@@ -4397,6 +4397,17 @@ controlled callbacks stopped before forward execution. Layout/action counts and
 software checks add no scientific convergence, fit or release qualification.
 
 
+### Approved Astra UI improvements (2026-10-08)
+
+A01–A08 and dependency-ready stages 1–4 add visible scientific snapshot state and a
+numerical display legend; pinned derived incidence/mosaic with one device selector;
+a collapsible Hold/Follow/Profile/Compare/Export inspection area; immutable recorded
+launch export; and guided typed fitting preparation. Existing scene/gesture/history,
+startup, contrast, frozen covariance and unavailable engine boundaries remain in force.
+Saved-result comparison admits only literal compatible configured native-cell declarations,
+with explicit shared limits. Native geometry identity and model/count residual admission
+remain unavailable. No fits or forward images are part of this UI implementation.
+
 ### First Simulator pattern repair (B033, 2026-10-08)
 
 Fresh entry consumes a one-time request after default admission, through the existing

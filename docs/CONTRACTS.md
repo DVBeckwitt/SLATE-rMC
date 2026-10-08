@@ -1332,6 +1332,28 @@ through their owner; archive relocation does not rewrite the output declaration.
 
 ## Compact Live Simulator dashboard
 
+The detector presents input match/history, presentation versus quantitative state,
+explicit recorded completion/progress, observable and qualification independently.
+Configured workers record execution completion only at their successful terminal return;
+older snapshots retain unknown completion. Completion never establishes convergence.
+The numerical color legend describes the actual shader limits, mode and active display
+aggregation. Display exposure changes limits only; clipping uses positive display cells.
+
+Inspection connects existing Hold/Follow, exact Profiles/ROI and exact export owners.
+Saved configured native-cell results can be reopened for comparison through the existing
+hashed-result reader. Compatibility requires the same declared measure, entire instrument
+geometry/frame/support and native shape; no alignment, rebinning or model/count residual
+admission is implied. Shared native-cell limits are explicit. Recorded-launch export uses
+the displayed frame's immutable declaration, including historical inputs, and invents no
+desktop Monte Carlo CLI equivalent. Native saved comparison without a bound geometry
+identity remains unavailable.
+
+Fitting preparation follows Inputs, Exclusions/counts, Geometry review, Model/stages and
+Results. Typed stage selection edits the same pending declaration as Advanced; parameter
+order, owner/unit/scope, fixed/gauge definitions, physical bounds and final-stage ordering
+remain authoritative. Native execution/results remain unavailable; complete covariance is
+retained by its existing owner. Review actions do not adopt new geometry into frozen inputs.
+
 The desktop Simulator offers one primary Live/Run-update/Stop/Advanced toolbar and a
 scrollable, resizable parameter sidebar. Quick controls write through the existing
 configured/native schema editors to the same immutable draft and bounded undo history.

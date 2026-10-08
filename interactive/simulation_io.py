@@ -3,7 +3,7 @@
 import hashlib
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
@@ -22,7 +22,7 @@ from native_simulation_state import (
     native_draft_from_document,
     native_reference_from_document,
 )
-from project_state import linear_display_limits
+from project_state import linear_display_limits, read_project_document
 from simulation_state import (
     MAX_SIMULATION_YAML_BYTES,
     SimulationDraft,
@@ -30,6 +30,7 @@ from simulation_state import (
     SimulationReference,
     simulation_draft_document,
     simulation_draft_from_document,
+    simulation_reference_document,
     simulation_reference_from_document,
 )
 
@@ -486,6 +487,7 @@ def run_simulation(argument: bytes, control: JobControl) -> JobResult:
         _stop(control)
         metadata = {
             "configuration_sha256": draft.configuration_sha256,
+            "execution_complete": False,
             "imported_configuration_sha256": draft.imported_sha256,
             "cif_sha256": config.cif_sha256,
             "source_revision": inputs.incident.states.source_revision,
@@ -511,7 +513,15 @@ def run_simulation(argument: bytes, control: JobControl) -> JobResult:
                 else "detector_visible_intrinsic_ewald_latent_density_A2_rad2_inv.v1"
             )
             frame = _prepared_frame(
-                draft, run_id, None, 0, measure, "canonical_numpy", True, auxiliary, metadata
+                draft,
+                run_id,
+                None,
+                0,
+                measure,
+                "canonical_numpy",
+                True,
+                auxiliary,
+                {**metadata, "execution_complete": True},
             )
             return JobResult(frame, frame.nbytes)
         if not isinstance(inputs.strength, Bi2X3FiniteStackStrength):
@@ -636,6 +646,14 @@ def run_simulation(argument: bytes, control: JobControl) -> JobResult:
                     metadata,
                 )
             _stop(control)
+            frame = replace(
+                frame,
+                manifest=json.dumps(
+                    {**json.loads(frame.manifest), "execution_complete": True},
+                    sort_keys=True,
+                    allow_nan=False,
+                ).encode(),
+            )
             return JobResult(frame, frame.nbytes)
         finally:
             # All sampler operations and final reference release occur on this owning worker.
@@ -983,3 +1001,49 @@ def reopen_simulation_result(argument: bytes, control: JobControl) -> JobResult:
     )
     _stop(control)
     return JobResult(frame, frame.nbytes)
+
+
+def reopen_comparison(argument, control):
+    request = json.loads(argument)
+    cpu = request.get("other_cpu_bytes", 0)
+    gpu = request.get("other_gpu_bytes", 0)
+    if (
+        type(cpu) is not int
+        or type(gpu) is not int
+        or min(cpu, gpu) < 0
+        or cpu + 512 * 1024**2 > MAX_SIMULATION_CPU_BYTES
+        or gpu + 2 * MAX_SIMULATION_PIXELS * 4 > MAX_SIMULATION_GPU_BYTES
+    ):
+        raise ValueError(
+            "Saved comparison exceeds shared CPU/GPU admission; close other retained views"
+        )
+    document = read_project_document(Path(request["path"]))
+    _stop(control)
+    reference = document.view.simulation_result
+    if reference is None:
+        raise ValueError(
+            "Selected project has no configured saved-result reference; acquisition counts cannot be compared to simulation mass"
+        )
+    return reopen_simulation_result(
+        json.dumps(simulation_reference_document(reference)).encode(), control
+    )
+
+
+def export_recorded_launch(argument, control):
+    request = json.loads(argument)
+    manifest = request["manifest"]
+    draft = manifest["draft"]
+    protected = [Path(v) for v in request["protected"]]
+    path = Path(request["path"]).absolute()
+    _external(path, protected)
+    # This exact recorded declaration is the replay authority, never today's editor.
+    payload = {"schema": "slate.recorded-launch.v1", "snapshot_manifest": manifest}
+    if "yaml_text" in draft:
+        payload["configuration_yaml"] = draft["yaml_text"]
+    else:
+        payload["physics_json"] = draft["physics_json"]
+    payload["replay"] = (
+        "No exact public CLI replay for this desktop snapshot route/budget; use the recorded typed declaration. No runnable command is invented."
+    )
+    _publish_bytes(path, json.dumps(payload, indent=2, allow_nan=False).encode(), control)
+    return JobResult(str(path), 4096)

@@ -244,11 +244,12 @@ structure declarations. Preview execution uses 64 source samples, four CPU worke
 seed 1729. Detector output is enabled; reciprocal/Ewald outputs and configured figure export
 are off. These are practical starting values, not converged or qualified settings.
 
-Loading performs canonical non-solving validation. Run remains disabled while loading or after
-failure; successful admission enables **Run selected outputs**, which must be clicked explicitly.
-No simulation, fit or output export starts automatically. Existing or recovered projects retain
-their drafts, selected native/configured workflow and saved results; saved empty projects stay
-empty. Manual loading, typing run controls or opening another project supersedes a pending default.
+Fresh entry validates the starter and requests one canonical diffraction pattern automatically,
+with **Live off**. **Stop**, leaving Simulator, or Open/Close cancels that one-time request;
+returning to the tab does not restart it. Subsequent calculations use **Run/update** or explicit
+**Live**. Existing/custom/recovered projects retain their declarations. **Show saved image**
+reopens the exact hashed result without recalculation; image-less drafts use **Run/update**.
+Manual loading, editing run controls or opening another project supersedes a pending default.
 
 Use **Load configuration** to load another supported `rasim-simulation-v2` YAML.
 No acquisition, observation pack, fit or scene edit is required. Search and grouped forms expose
@@ -256,7 +257,8 @@ all strict-loader fields, including optional values, with units, domains, defaul
 Values are preserved across unopened groups. Edit a field, then **Validate complete draft**;
 validation uses the complete canonical configuration and geometry/source builder. Invalid values
 remain visible for correction. Undo/redo restores draft content with fresh revisions. Field edits
-supersede active work and never start a simulation automatically.
+supersede obsolete work. With Live off, intensity remains explicit; user-enabled Live
+requests updates after editing. Camera and display changes do not edit physics or run intensity.
 
 Source count/seed define the configured source ensemble. **MC draws per source state** and
 **Detector seed** are separate. Select sampled source position or conditional-position integration
@@ -267,11 +269,11 @@ generic-CIF admission alone does not provide that renderer. Output enablement, C
 and route compatibility are enforced with visible reasons. Backend failures do not select another
 backend. Auxiliary-only routes require detector output to be deselected explicitly.
 
-**Run selected outputs** uses the existing numerical owners and publishes progressive prefixes.
+**Run/update** uses the existing numerical owners and publishes progressive prefixes.
 Float32 presentation copies are owned separately from sampler leases. Exact cursor and linked
 bands use an immutable float64 quantitative snapshot; previews say **Awaiting quantitative
-snapshot**. **Inspect this snapshot** holds matching image/profiles at the next available boundary;
-**Follow progression** resumes adoption. Large profile queries wait for the global worker after
+snapshot**. **Inspection → Hold snapshot** holds matching image/profiles at the next available boundary;
+**Follow** resumes adoption. Large profile queries wait for the global worker after
 active MC drains. Pixel-center density and macrobin quadrature remain display approximations;
 macrobin indices are labeled, with native center arrays retained in exports. Reciprocal/Ewald
 panels draw at most 512 sampled Qx/Qz points with linear canonical-density colors, while full
@@ -314,6 +316,24 @@ boundary and view reserve. Rejected size changes keep the prior draft, history, 
 and selection savable; declared input is never trimmed. Ordinary close waits asynchronously for
 ownership to drain.
 
+### Detector state and inspection
+
+The detector reports whether its recorded inputs match the editable draft, preview versus
+quantitative data, recorded execution completion and qualification. An old saved result with no
+completion declaration says **Completion unrecorded**. A completed budget does not establish
+convergence. The numerical color legend follows the selected linear, positive-log or signed
+mapping; its note identifies display binning and the fraction of positive display cells clipped
+above Upper. **Display exposure** changes presentation limits only.
+
+Open **Inspection** for Hold/Follow, exact Profiles/ROI, snapshot export and recorded provenance.
+**Compare saved result** opens a frozen pair with shared native-cell display limits after
+checking declared measure, detector geometry/frame and sample support. It does not align images
+or compare acquisition counts with model mass. Native recipes without an admitted geometry
+identity and macrobin/auxiliary routes display their unavailable reason. **Compare acquisitions**
+opens the existing acquisition comparison workspace. **Export recorded launch** saves the
+displayed result's exact configuration and manifest, including historical inputs after edits;
+it does not substitute the current draft or invent an unsupported replay command.
+
 ### Independent native simulator and reviewed experiment transfer
 
 In **Simulator**, choose **Independent native recipe**, then **Load native physics**. Load an
@@ -329,14 +349,14 @@ rectangle width (1 is full native resolution) and optional numerical proposal mo
 thickness is `N*c + extra` angstroms. Explicit closed surface/phase fractions preserve tiny
 probabilities, must agree with canonical shares and are cleared when their shares change.
 **Validate complete draft** checks physical domains and the complete source/rod/panel declaration;
-**Run selected outputs** starts CPU deterministic detector integration on the shared numerical
+**Run/update** starts CPU deterministic detector integration on the shared numerical
 worker with one nested BLAS thread. Existing memory/panel/source/rod caps reject unsupported work
 without pruning it. Setup and individual batches are noninterruptible; Cancel acknowledges the
 request and safe drain follows asynchronously. Native CUDA and auxiliary routes are unavailable.
 
-**Inspect this snapshot** holds an immutable whole-panel float64 sum of completed additive event
+**Inspection → Hold snapshot** holds an immutable whole-panel float64 sum of completed additive event
 batches. Every rectangle has been evaluated for those batches; the integral remains incomplete
-until all independent parts finish. **Follow progression** resumes presentation. Macrobin display
+until all independent parts finish. **Follow** resumes presentation. Macrobin display
 indices differ from exported native-pixel centers/edges. Exact profiles/export use float64 arrays;
 completion remains nominal and does not establish convergence or a qualified fit. **Export native
 draft JSON** saves the complete independent declaration. **Export exact snapshot** and **Reopen
@@ -601,6 +621,13 @@ size and shared resource limits still apply; remove unselected history if a boun
 
 ### Prepared inputs / draft plan
 
+Preparation follows **Inputs → Exclusions/counts → Geometry review → Model/stages → Results**.
+Readiness distinguishes recorded declarations, verified arrays, pending edits and unavailable
+execution. Exclusion/geometry review opens the existing acquisition owners; it does not modify
+frozen observations or adopt a new calibration. The normal parameter view uses typed stage
+selection; full definitions remain in Advanced. Commit/discard/plan export stay visible outside
+the scrolling declarations. Results explain the missing native execution/result admission.
+
 Open **Prepared inputs / draft plan**, choose existing native physics, observations and refinement
 plan JSON, then **Load prepared set**. Profiles show frozen raw/background/signed corrected counts;
 select a row to inspect exact values and its full covariance row. Marginal sigma is labeled separately.
@@ -613,7 +640,7 @@ descriptions; reload original sources to restore arrays. Historical definitions 
 **Reuse compatible historical starts** aligns by owner/name and explains incompatible changes.
 Load an authoritative current plan to review new/removed definitions; unknown fields stay inert.
 **Export committed plan** writes the exact committed plan outside the repository.
-Run and indexed adoption are unavailable pending R4. Structural draft checks do not qualify a fit.
+Native fit execution and indexed adoption are unavailable in this build. Structural draft checks do not qualify a fit.
 
 
 ### Portable archive / exact exports
@@ -750,8 +777,9 @@ choices and exact numerical declarations. Stage names do not establish scientifi
 capability. Derived thickness, phase/parent fractions and candidate-dependent inactive
 directions remain with the existing material owner; no candidate values are inferred.
 
-For supported definitions, edit an earlier stage's **Active canonical names** as a
-JSON list and its declared historical-guard boolean. These are unvalidated draft
+For supported definitions, use the typed active-parameter check list for an earlier stage;
+the normal table shows scientific name, owner/scope, units, initial values, bounds and fixed/active state.
+Raw JSON declarations, bound kinds and sensitivity scales remain in Advanced. These are unvalidated draft
 proposals. Existing method/budget, finite-difference and parameter controls remain.
 **Commit displayed draft** uses existing non-solving validation; it does not admit
 a launch. Global fixed/gauge definitions and the final stage's free-coordinate

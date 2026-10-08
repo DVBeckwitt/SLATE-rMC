@@ -81,22 +81,6 @@ class SimulatorScene(ExperimentScenePanel):
         self.hint.setToolTip(
             "Click a device or arrow to edit. Empty left drag: orbit; right drag: pan; wheel: zoom. Esc cancels a handle; Undo reverses one gesture."
         )
-        self.device_buttons = {}
-        device_row = QHBoxLayout()
-        for label, device in (
-            ("Beam", "Beam"),
-            ("Sample", "Sample"),
-            ("Angle", "Axis 1"),
-            ("Detector", "Detector"),
-            ("Mosaic", "Mosaic"),
-        ):
-            button = QPushButton(label)
-            button.setCheckable(True)
-            button.setToolTip("Select " + device + "; edit the declared values below")
-            button.clicked.connect(lambda _checked=False, name=device: self.pick(name))
-            device_row.addWidget(button)
-            self.device_buttons[device] = button
-        self.layout().addLayout(device_row)
         self.devices = QComboBox()
         self.devices.setAccessibleName("Scene device selection; same targets as figure labels")
         self.devices.addItems(
@@ -109,13 +93,25 @@ class SimulatorScene(ExperimentScenePanel):
                 "Mosaic",
                 "Detector",
                 "External path",
-                "Sampling",
+                "Numerics / optics",
                 "Display",
                 "Identity",
             ]
         )
         self.devices.setToolTip("All devices and secondary declarations")
         self.layout().addWidget(self.devices)
+        self.incidence = QLabel("Mean-ray incidence: current geometry unavailable")
+        self.incidence.setWordWrap(True)
+        self.layout().addWidget(self.incidence)
+        self.motor_order = QLabel()
+        self.motor_order.setWordWrap(True)
+        self.layout().addWidget(self.motor_order)
+        self.pinned_mosaic = QWidget()
+        self.pinned_layout = QGridLayout(self.pinned_mosaic)
+        self.pinned_layout.setContentsMargins(0, 0, 0, 0)
+        self.pinned_controls = {}
+        self._pinned_keys = ()
+        self.layout().addWidget(self.pinned_mosaic)
         self.parameter = QComboBox()
         self.parameter.setAccessibleName("Selected device parameter")
         self.parameter.setSizeAdjustPolicy(
@@ -346,7 +342,7 @@ class SimulatorScene(ExperimentScenePanel):
             return result
         for entry in s.quick_fields():
             (path, indices), group, _label, _unit, value, _integer, _probability = entry
-            target = "Sampling"
+            target = "Numerics / optics"
             if group == "Beam Controls":
                 target = "Beam"
             elif group == "Mosaic Broadening":
@@ -413,9 +409,6 @@ class SimulatorScene(ExperimentScenePanel):
         self.step.setEnabled(available)
         device = self.devices.currentText()
         self.view.selected_object = device
-        for name, button in self.device_buttons.items():
-            button.setChecked(name == device)
-            button.setEnabled(self.devices.findText(name) >= 0 and self.simulator._drag is None)
         self.focus_button.setEnabled(self.state is not None)
         legend = "Left drag: orbit; right: pan; wheel: zoom."
         if device in ("Sample", "Mount"):
@@ -439,11 +432,11 @@ class SimulatorScene(ExperimentScenePanel):
                 else f"Draft {draft.draft_id}, revision {draft.revision}; geometry and intensity identities are separate. Full provenance: Advanced parameters."
             )
         elif device == "Display":
-            note = "Detector: Auto 99%, Exposure, Upper and Full range. Scene: camera presets above; reset with Back to experiment. View changes do not edit physics."
+            note = "Detector: Auto 99%, Display exposure, Upper and Full range. Scene camera controls change the view only."
         elif device == "Beam":
             note += " Source reference plane; glyph is not an asserted tube/slit. Width and divergence are nonspatial parameters."
         elif device == "Mosaic":
-            note = "Physical distribution parameters; no unqualified probability cone. Angular integration controls belong to Sampling."
+            note = "Physical distribution parameters; no unqualified probability cone. Angular integration controls belong to Numerics / optics."
         if self.state is not None:
             note += f" Mean-ray glancing incidence (derived): {self.state.incidence_deg:.6g} deg. Geometry revision {self.state.draft.revision}; sample patch/holder schematic where support is unbounded."
         self.note.setToolTip(note + "\n" + self.hint.text())
@@ -496,11 +489,14 @@ class SimulatorScene(ExperimentScenePanel):
         self.edit(text)
 
     def sync_common(self):
+        self.sync_pinned()
         device = self.devices.currentText()
         entries = self._entries
         if device == "Beam":
             entries = [
-                e for e in entries if e[0][0][-1] in ("mean_origin_lab_m", "mean_wavelength_A")
+                e
+                for e in entries
+                if e[0][0][-1] in ("spatial_sigma_m", "divergence_sigma_rad", "mean_wavelength_A")
             ]
         elif device == "Detector":
             entries = [
@@ -513,6 +509,7 @@ class SimulatorScene(ExperimentScenePanel):
             "Mount",
             "Goniometer base",
             "Mosaic",
+            "Crystal / material",
         ) and not device.startswith("Axis "):
             entries = []
         keys = tuple(e[0] for e in entries)
@@ -532,11 +529,7 @@ class SimulatorScene(ExperimentScenePanel):
                     .removeprefix("Beam origin ")
                 )
                 if device.startswith("Axis "):
-                    short = (
-                        "Incident angle"
-                        if label.startswith("Incident angle")
-                        else "Declared axis angle"
-                    )
+                    short = f"{device} motor angle"
                 caption = QLabel(f"{short} ({unit})")
                 caption.setWordWrap(False)
                 caption.setBuddy(field)
@@ -557,6 +550,47 @@ class SimulatorScene(ExperimentScenePanel):
                 180, rows * row_height + (rows - 1) * self.fields_layout.verticalSpacing() + 8
             )
             self.fields_scroll.setFixedHeight(height)
+
+    def sync_pinned(self):
+        s = self.simulator
+        matching = self.state is not None and self.current_draft == s.active_draft
+        self.incidence.setText(
+            f"Mean-ray incidence {self.state.incidence_deg:.7g}° (derived from current geometry)"
+            if matching
+            else "Mean-ray incidence: waiting for current geometry"
+        )
+        rotations = [] if s._mapping is None else s._mapping["instrument"].get("axis_rotations", [])
+        self.motor_order.setText(
+            "Motor order: "
+            + " → ".join(f"Axis {i + 1} LAB {r['axis_lab']}" for i, r in enumerate(rotations))
+            if rotations
+            else "Native LAB sample pose; no separately declared motor chain"
+            if s.draft_kind.currentData() == "native"
+            else "No declared motors"
+        )
+        entries = [e for e in s.quick_fields() if e[1] == "Mosaic Broadening"]
+        keys = tuple(e[0] for e in entries)
+        if keys != self._pinned_keys:
+            while self.pinned_layout.count():
+                self.pinned_layout.takeAt(0).widget().deleteLater()
+            self.pinned_controls.clear()
+            self._pinned_keys = keys
+            for column, (key, _group, label, unit, _value, _integer, _probability) in enumerate(
+                entries
+            ):
+                field = NumberEdit()
+                field.setAccessibleName(f"Pinned mosaic: {label}, exact {unit}")
+                caption = QLabel(f"{label} ({unit})")
+                caption.setWordWrap(True)
+                caption.setBuddy(field)
+                self.pinned_layout.addWidget(caption, 0, column)
+                self.pinned_layout.addWidget(field, 1, column)
+                field.committed.connect(lambda text, k=key: s.quick_edit(k, text))
+                self.pinned_controls[key] = field
+        for key, _group, _label, _unit, value, integer, _probability in entries:
+            self.pinned_controls[key].setText(str(value) if integer else repr(float(value)))
+            self.pinned_controls[key].setEnabled(s._drag is None)
+        self.pinned_mosaic.setVisible(bool(entries))
 
     def update_handle(self):
         if (

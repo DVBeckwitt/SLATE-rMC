@@ -1,9 +1,47 @@
 """Small Simulator contrast policy over the existing detector controls."""
 
+import math
+
 from project_state import FLOAT32_NORMAL_MIN, linear_display_limits, validate_display_limits
 from PySide6.QtCore import QObject
+from PySide6.QtGui import QColor, QLinearGradient, QPainter
 from PySide6.QtWidgets import QDoubleSpinBox, QHBoxLayout, QLabel, QPushButton, QWidget
 from simulation_widgets import NumberEdit
+
+
+class ColorLegend(QWidget):
+    """Numerical ticks for the detector shader's current transfer function."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.low, self.high, self.mode = 0.0, 1.0, "linear"
+        self.setMinimumHeight(38)
+        self.setAccessibleName("Detector color legend; display limits only")
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        width = max(1, self.width() - 2)
+        gradient = QLinearGradient(1, 0, width, 0)
+        if self.mode == "signed":
+            colors = ((0, (0.20, 0.64, 0.92)), (0.5, (0.17, 0.19, 0.22)), (1, (1, 0.65, 0.19)))
+            middle = 0.0
+        else:
+            colors = ((0, (0, 0.08, 0.12)), (1, (1, 0.90, 0.80)))
+            middle = (
+                math.exp((math.log(self.low) + math.log(self.high)) / 2)
+                if self.mode == "positive_log" and self.low > 0
+                else self.low / 2 + self.high / 2
+            )
+        for position, color in colors:
+            gradient.setColorAt(position, QColor.fromRgbF(*color))
+        painter.fillRect(1, 1, width, 10, gradient)
+        painter.setPen(self.palette().windowText().color())
+        for fraction, value in ((0, self.low), (0.5, middle), (1, self.high)):
+            text = f"{value:.6g}"
+            text_width = painter.fontMetrics().horizontalAdvance(text)
+            x = min(width - text_width, max(1, round(fraction * width - text_width / 2)))
+            painter.drawText(x, 29, text)
+        painter.end()
 
 
 class SimulationContrast(QObject):
@@ -26,9 +64,9 @@ class SimulationContrast(QObject):
         self.exposure.setSingleStep(0.25)
         self.exposure.setSuffix(" x")
         self.exposure.setMaximumWidth(110)
-        self.exposure.setAccessibleName("Simulator exposure; higher reveals weaker signal")
+        self.exposure.setAccessibleName("Display exposure; higher reveals weaker signal")
         self.exposure.setToolTip(
-            "Changes display limits only. Higher exposure lowers the upper limit and may clip bright peaks."
+            "Changes display limits only. Higher display exposure lowers the upper limit and may clip bright peaks."
         )
         self.full_button = QPushButton("Full range")
         self.full_button.setToolTip(
@@ -65,7 +103,7 @@ class SimulationContrast(QObject):
         row.addWidget(self.range_button)
         panel.layout().addWidget(self.range_controls, 2, 0, 1, 2)
         self.range_controls.hide()
-        label = QLabel("Exposure")
+        label = QLabel("Display exposure")
         label.setBuddy(self.exposure)
         row.addWidget(label)
         row.addWidget(self.exposure)
@@ -75,8 +113,11 @@ class SimulationContrast(QObject):
             "Linear upper limit: 99th percentile of finite positive DISPLAY cells. Held while this run refines."
         )
         panel.layout().removeWidget(panel.contrast_note)
-        row.addWidget(panel.contrast_note, 1)
-        panel.contrast_note.show()
+        self.legend = ColorLegend(panel)
+        self.legend.hide()
+        self.legend_note = QLabel("Display legend unavailable until an image is received")
+        self.legend_note.setWordWrap(True)
+        panel.contrast_note.hide()
         for item in panel.auto_button.parentWidget().findChildren(QLabel):
             if item.text() == "High":
                 item.setText("Upper")
@@ -116,6 +157,7 @@ class SimulationContrast(QObject):
 
     def admit(self, frame):
         self.frame = frame
+        self.legend.show()
         if frame.run_id != self._run_id:
             self._anchors.clear()
             self._run_id = frame.run_id
@@ -184,8 +226,22 @@ class SimulationContrast(QObject):
             f"{level.invalid_count} invalid bins{negative}{tiny}. Cursor/profiles/export use original cells."
         )
         self.panel.contrast_note.setWordWrap(False)
-        self.panel.contrast_note.setText(
-            f"{clipped:.1f}% clipped" + (" · invalid bins" if level.invalid_count else "")
+        self.panel.contrast_note.setText(f"{clipped:.1f}% of positive display cells above Upper")
+        self.legend.low, self.legend.high, self.legend.mode = (
+            view.low_value,
+            view.high_value,
+            view.contrast_mode,
+        )
+        self.legend.update()
+        self.legend_note.setText(
+            f"{view.contrast_mode.replace('_', ' ')} · {self.panel.observable_unit}; "
+            + (
+                "native cells"
+                if level.bin_size == 1
+                else f"display cell = sum of {level.bin_size} x {level.bin_size} native cells (edges may be smaller)"
+            )
+            + f" · ~{clipped:.1f}% of positive display cells above Upper{negative}{tiny}"
+            + (f" · {level.invalid_count} invalid cells" if level.invalid_count else "")
         )
         self.panel.contrast_note.setToolTip(
             description

@@ -938,6 +938,7 @@ class ShellWindow(QMainWindow):
             self.detector_panel.view,
             *[p.view for p in self.comparison_panel.panels],
             self.comparison_panel.magnifier,
+            *self.simulator.inspection.comparison_views,
         )
         for view in views:
             for value in (view.image, view._display, view.mask_reasons):
@@ -948,7 +949,12 @@ class ShellWindow(QMainWindow):
                 value = getattr(mask, name, None)
                 if isinstance(value, np.ndarray):
                     arrays[id(value)] = value
-        for frame in (self.simulator.frame, self.simulator.latest_frame):
+        for frame in (
+            self.simulator.frame,
+            self.simulator.latest_frame,
+            self.simulator.inspection.reference,
+            self.simulator.inspection.compared_frame,
+        ):
             if frame is None:
                 continue
             for value in (frame.image, frame.display, *[a for _, a in frame.arrays]):
@@ -1548,6 +1554,15 @@ class ShellWindow(QMainWindow):
             run, budget = export_simulation, 8192
         elif operation == "reopen":
             run, budget = reopen_simulation_result, 160 * 1024**2
+        elif operation in ("compare_reopen", "export_launch"):
+            from simulation_io import export_recorded_launch, reopen_comparison
+
+            run = reopen_comparison if operation == "compare_reopen" else export_recorded_launch
+            budget = 160 * 1024**2 if operation == "compare_reopen" else 4096
+            if operation == "compare_reopen":
+                request = json.loads(argument)
+                request.update(self._simulation_resource_charge())
+                argument = json.dumps(request, allow_nan=False).encode()
         else:
             raise ValueError("unknown simulation operation")
         if operation in (
