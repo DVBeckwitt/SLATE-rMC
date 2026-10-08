@@ -909,13 +909,14 @@ class ShellWindow(QMainWindow):
             if (
                 panel.draft is None
                 and panel.native.draft is None
+                and panel.frame is None
                 and panel.draft_kind.currentData() == "configured"
                 and panel.epoch == 0
                 and self._pending_simulation is None
                 and self._pending_open is None
                 and self._active_kind != "open"
             ):
-                panel._fresh_live_pending = False
+                panel._initial_pattern_pending = True
                 self._request_simulation(
                     "load_default",
                     json.dumps(

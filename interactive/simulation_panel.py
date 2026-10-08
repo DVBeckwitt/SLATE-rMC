@@ -315,7 +315,7 @@ class SimulatorPanel(QWidget):
         self._drag_timer = QTimer(self)
         self._drag_timer.setInterval(200)
         self._drag_timer.timeout.connect(self._drag_tick)
-        self._fresh_live_pending = False
+        self._initial_pattern_pending = False
         self._live_timer = QTimer(self)
         self._live_timer.setSingleShot(True)
         self._live_timer.setInterval(300)
@@ -378,16 +378,17 @@ class SimulatorPanel(QWidget):
         self.redo_button = QPushButton("Redo draft")
         self.save_configuration_button = QPushButton("Export configuration YAML")
         self.export_button = QPushButton("Export exact snapshot")
-        self.reopen_button = QPushButton("Reopen saved snapshot")
+        self.reopen_button = QPushButton("Show saved image")
+        self.reopen_button.setToolTip("Reopen the saved snapshot by exact hash; no recalculation")
         for button in (
             self.undo_button,
             self.redo_button,
             self.save_configuration_button,
             self.export_button,
-            self.reopen_button,
         ):
             actions.addRow(button)
         action_layout.addLayout(actions)
+        controls.insertWidget(3, self.reopen_button)
         transfer_actions = QHBoxLayout()
         self.transfer_target = QComboBox()
         self.transfer_target.addItem("Experiment -> configured draft", "configured")
@@ -623,16 +624,27 @@ class SimulatorPanel(QWidget):
         elif busy and ("stop" in lowered or "cancel" in lowered):
             operation = "Stopping"
         elif busy:
-            operation = (
-                "Updating geometry"
-                if self.shell._simulation_operation == "scene_geometry"
-                else "Updating"
-            )
+            operation = {
+                "load_default": "Preparing pattern",
+                "validate": "Preparing pattern",
+                "native_validate": "Preparing pattern",
+                "run": "Calculating pattern",
+                "native_run": "Calculating pattern",
+                "reopen": "Opening saved image",
+                "scene_geometry": "Updating geometry",
+            }.get(self.shell._simulation_operation, "Updating")
         elif "stop" in lowered or "cancel" in lowered:
             operation = "Stopped"
         else:
             operation = "Ready" if self.active_draft is not None else "No draft"
-        image = "No intensity image"
+        saved_image = (
+            self.native.result_reference
+            if self.draft_kind.currentData() == "native"
+            else self.result_reference
+        )
+        image = (
+            "No image — Show saved image" if saved_image is not None else "No image — Run/update"
+        )
         if self.frame is not None:
             image = "Current image" if self.frame.draft == self.active_draft else "Historical image"
             image += " · nominal"
@@ -730,7 +742,7 @@ class SimulatorPanel(QWidget):
         self.scene.stop()
         self._drag_timer.stop()
         self._live_timer.stop()
-        self._fresh_live_pending = False
+        self._initial_pattern_pending = False
         self.live.blockSignals(True)
         self.live.setChecked(False)
         self.live.blockSignals(False)
@@ -744,6 +756,8 @@ class SimulatorPanel(QWidget):
         self.refresh()
 
     def update_failed(self, context):
+        if self.shell._simulation_operation == "load_default":
+            self._initial_pattern_pending = False
         if self.shell._simulation_operation == "scene_geometry":
             self.scene._requested = None
             self.scene._continue = False
@@ -1098,9 +1112,11 @@ class SimulatorPanel(QWidget):
             and not busy
             and not self.detector._profile_pending
         )
-        self.reopen_button.setEnabled(
-            (self.native.result_reference if native else self.result_reference) is not None
-        )
+        saved_image = (
+            self.native.result_reference if native else self.result_reference
+        ) is not None
+        self.reopen_button.setEnabled(saved_image and not busy)
+        self.reopen_button.setVisible(saved_image)
         self.undo_button.setEnabled(bool(history.undo_actions))
         self.redo_button.setEnabled(bool(history.redo_actions))
         self.dashboard.sync()
@@ -1974,7 +1990,7 @@ class SimulatorPanel(QWidget):
             if operation == "load_default":
                 self.status.setText(
                     "Bi2Se3 starting preview: editable, nominal, not converged or qualified. "
-                    "Canonical inputs validated; Run selected outputs is explicit. "
+                    "Canonical inputs validated; preparing the first detector pattern once. "
                     "64 source samples, 4 CPU workers, 8 draws/source, detector seed 1729; "
                     "detector only, configured figure export off."
                 )
@@ -2027,9 +2043,13 @@ class SimulatorPanel(QWidget):
                 f"Mean-ray glancing incidence: {incidence_deg:.12g} deg\n"
                 "Signed toward the sample; derived from the canonical LAB → SAMPLE transform."
             )
-        if operation == "load_default" and self._fresh_live_pending:
-            self._fresh_live_pending = False
-            self.live.setChecked(True)
+        if operation == "load_default" and self._initial_pattern_pending:
+            self._initial_pattern_pending = False
+            if self.frame is None and self.draft_kind.currentData() == "configured":
+                self.status.setText(
+                    "Preparing the first diffraction pattern; Stop cancels it. Live remains off."
+                )
+                self.request_update(force=True)
         elif continue_update:
             self._last_requested = (self.draft_kind.currentData(), self.active_draft)
             self.run()

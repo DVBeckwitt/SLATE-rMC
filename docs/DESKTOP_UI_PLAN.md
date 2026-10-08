@@ -4357,8 +4357,8 @@ slider navigation feed the existing immutable draft/history owners. Advanced ret
 full schema, routing, exports, transfers, inspection and history.
 
 Live validates then runs the canonical configured/native Simulator after a 300 ms pause,
-using the existing one-worker latest-request lifecycle. Default visits load geometry with Live off; explicit Live or Run/update starts
-intensity work. Ordinary saved/imported/recovered Open leaves Live off.
+using the existing one-worker latest-request lifecycle. Fresh default visits request one diffraction pattern with Live off; subsequent
+updates use Run/update or explicit Live. Ordinary saved/imported/recovered Open leaves Live off.
 Stop and project/workspace/route changes reject late work. Genuine displayed frames and
 exact profiles retain their historical identity during updates. See CONTRACTS.md and
 VALIDATION.md for incidence applicability, scalar navigation and evidence limits.
@@ -4388,9 +4388,23 @@ Auto 99%, exposure and display binning retain their existing measure and raw arr
 Re-export of a reopened result replaces saved inspection vectors with the current
 exact profile query, preventing duplicate export-array names.
 
-Opening Simulator loads the default geometry with Live off. Explicit Run/update or
-Live starts intensity work; view actions do not. Save/Open retains declarations and
+Opening a fresh Simulator loads the default and requests one initial diffraction
+pattern with Live off. Subsequent intensity updates use Run/update or explicit Live;
+camera and resize actions do not request intensity. Save/Open retains declarations and
 Live off; Reopen saved snapshot performs the existing exact-hash result admission.
 Focused external Qt checks reuse genuine saved images, direct raw-pixel sums and
 controlled callbacks stopped before forward execution. Layout/action counts and
 software checks add no scientific convergence, fit or release qualification.
+
+
+### First Simulator pattern repair (B033, 2026-10-08)
+
+Fresh entry consumes a one-time request after default admission, through the existing
+canonical geometry/validation/Run owner. It does not enable ongoing Live. Stop,
+workspace exit, Open/Close and stale worker generations prevent continuation or late
+publication; repeat visits do not restart canceled work. Preparing/Calculating and
+complete errors remain visible. Show saved image exposes exact-hash Reopen in the
+primary row; restored/custom settings are retained and never silently recalculated
+or replaced with the starter. Image-less restored drafts use explicit Run/update.
+Real startup rendering evidence is nominal functionality, not convergence or fit
+qualification. Scientific inputs, sampling, measures and tolerances are unchanged.
