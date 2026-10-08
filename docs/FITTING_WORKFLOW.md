@@ -87,6 +87,58 @@ Preserve cross-covariance or use disjoint support; label repeatedly inspected
 same-image controls as development evidence. Stronger evidence is prediction of
 reserved spatial regions or a separately bound acquisition.
 
+### Required background checks
+
+Before solving, freeze support, visibility, control selection and acceptance limits.
+After solving, complete prediction and residual checks before adopting a background/
+refit or exporting its figure. These are operator/caller requirements; existing
+numerical validation alone does not establish that they ran. Reuse a recorded check
+only when its acquisition, controls, background, physical prediction and observation
+identities remain unchanged. Reuse the procedure across samples; transferring fitted
+coefficients requires acquisition-specific evidence or an explicitly shared model.
+
+1. **Establish local support.** Record actual native-pixel footprints, radial coverage
+   and gaps, azimuthal coverage, and the background coefficients contributing to each
+   fitted or displayed region. Knot positions, control centres and a global minimum/
+   maximum radius are insufficient. Distinguish data-supported prediction, partial
+   support and extrapolation, including constant endpoint extension. A monotone curve
+   can have an unsupported level. Declare transfer assumptions under protected peaks;
+   nearby controls do not prove radial symmetry or identify the background there.
+2. **Separate collection from propagation.** Bind the observed holder boundary and
+   guard to the acquisition and apply consistent visibility rules to peaks and controls.
+   Record an assumed film horizon separately: it may constrain physical propagation
+   but must not silently become measured collection loss. Clear pixels do not certify
+   every modeled escape path. Do not transfer a guard width blindly between images.
+3. **Check prediction on separate controls.** Freeze native control membership and
+   acceptance limits before choosing a correction; include predicted sample scattering
+   on controls. Where coverage permits, fit one angular block and predict another,
+   then reverse, reporting regional signed bias and error in declared count units.
+   Reserved checks must share no positive-membership native pixels with training.
+   Preserve covariance for overlapping development checks; this does not make them
+   independent validation. If disjoint blocks are unavailable, record limited evidence
+   rather than inventing them. Reused development controls are not untouched evidence.
+4. **Investigate signed residual patterns.** Report broad negative troughs, negative-bin
+   fractions and signed interval masses with their spatial context. Use available full
+   covariance; otherwise label summaries descriptive, not significance tests. Correlated
+   bins are not independent trials. These alarms trigger diagnosis, not clipping,
+   residual-selected masks, or a requirement that every net bin be positive. Background
+   corrections require control evidence, not improved peak appearance.
+5. **Keep unsupported regions explicit.** Preserve raw counts and signed diagnostic
+   displays, marking extrapolation or inadequate angular support. Do not silently drop
+   those observations, change likelihood flags or claim validated subtraction. Any
+   fit relying on them remains conditional on the stated background assumptions; a
+   support change needs a separately declared comparison. Restrict empirical spread
+   bands to their supported regions. Elsewhere state uncertainty is unresolved; do not
+   copy an outer-region band inward or inflate errors until the physical model agrees.
+6. **Bind the figure to the checked state.** Save the check outcomes in the existing
+   diagnostic manifest with control/support and background identities. Within each
+   bin, data, background and physical signal use identical native weights and area.
+   Preserve the fit memberships and record each display operator, including diagnostic
+   extensions. Keep background resolution and saved physical scale; plotting never
+   refits. Report background predictive adequacy separately from physical
+   preservation gates. Better subtraction can expose a worse physical residual, and a
+   rejected physical candidate must not change the accepted state or fitted-bin labels.
+
 ## Measurements and the current error bars
 
 Let `c` be detector-native raw intensity and `W` the fractional pixel-membership
@@ -183,7 +235,8 @@ fit inputs. Never put diagnostic output or experiment callers in the repository.
 
 | Evidence | Working conclusion |
 |---|---|
-| Bi2Te3 inner radial correction: left predicts right MAE 6.747 to 2.087; right predicts left 5.851 to 2.183 counts/pixel. | Strongest measured local background success. Keep the predictive method; it does not identify the physical background or validate every peak's subtraction. |
+| Bi2Te3 inner radial correction: left predicts right MAE 6.747 to 2.087; right predicts left 5.851 to 2.183 counts/pixel. | Earlier local background success. Keep the predictive method; it does not identify the physical background or validate every peak's subtraction. |
+| October 8 Bi2Te3 inner plateau: 75.32350 to 57.24841 counts/pixel from disjoint shoulder controls; cross-side MAE fell 95–96%, negative 2.5–7.5-degree bins fell 49/50 to 1/50 without clipping. | Monotonicity did not establish the inner level. Keep local support checks and explicit inward extrapolation. The proposed scale refit failed the 00L preservation gate; the accepted physical state stayed unchanged. |
 | Holder screening and restoring omitted r1 fitting support changed which counts were actually fitted. | Keep explicit measurement ownership and visibility. Correct support is necessary even when the resulting residual worsens. |
 | Protected monotone background improved several off-peak diagnostics but could increase negative r3 bins or fail unchanged adoption gates. | Keep protection and independent controls; reject automatic global adoption or post-hoc gate changes. |
 | October 7 staged Se fit improved a matched objective by 2.284%, while protected 003/006 residuals worsened. Latest family refinement improved only 0.0167656%, with all seven profile RMS values slightly worse. | Staging and a lower scalar score are not a demonstrated physical repair. Report regional tradeoffs and the previous displayed state separately. |
@@ -215,6 +268,12 @@ These and the following packs are external, under
   `b5_family_fit.py`, the actual fitted objective and image cell operator.
 - `bi2se3_newer5_lowtheta_display.ra_diag.npz`: native weights, area, raw counts,
   physical signal, angle and fitted-pixel overlap for the low-angle display.
+
+The October 8 inner-background repair is retained separately in
+`bi2te3_5deg_inner_corrected.ra_diag.npz`
+(SHA256 `0bb5d743cc762d23bffb8b37579a8cf9f4d428fb39501f57f0ab8d8d5502d14e`)
+and `Bi2Te3_5deg_inner_corrected_fit_report_20261008.md` in the same external directory.
+Its controls provide local development evidence, not calibrated whole-image uncertainty.
 
 The current figure is `Bi2Se3_newer5_lowtheta_with_errors_20261008.png`/`.pdf`.
 Preserve its frozen evidence rather than replacing it with a visually similar

@@ -171,6 +171,14 @@ named observables, fixed inputs/measures/tolerances and an independent compariso
 appropriate. Reuse saved evidence when sufficient. Do not start fits, full images, sweeps or
 benchmarks merely because historical instructions mention them.
 
+## Background fitting and figure safeguards
+
+For background estimation, refitting or figure export, follow and record the
+[required background checks](docs/FITTING_WORKFLOW.md#required-background-checks).
+Unsupported subtraction must remain explicitly qualified; preserve the signed measurements
+and never choose background levels or masks to force nonnegative net data. These are caller
+obligations, not evidence that an automatic runtime check has been implemented or passed.
+
 ## Diagnostics
 
 Diagnostics are disabled by default. No diagnostic output may be written under the repository
