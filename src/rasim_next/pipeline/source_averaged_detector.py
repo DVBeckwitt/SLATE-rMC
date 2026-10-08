@@ -33,13 +33,9 @@ from rasim_next.pipeline._continuous_detector_kernel import (
 from rasim_next.pipeline.beam_position import ConditionalBeamPosition
 from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
 from rasim_next.pipeline.continuous_detector import (
-    DetectorPixelMass,
-    DetectorQuadrature,
-    PixelIntegrationMethod,
     SampleQIntensityEnvelope,
     _compile_detector_state,
     _float_array,
-    _subdivided_legendre_rule,
 )
 from rasim_next.pipeline.detector_revisions import (
     _detector_native_chart_revision,
@@ -2302,97 +2298,6 @@ class SourceAveragedDetectorEwaldMeasure:
             execution_backend=backend_id,
             execution_device=execution_device,
             rod_catalog_revision=self._rod_catalog_revision,
-        )
-
-    def integrate_native_pixels(
-        self,
-        *,
-        branch: int,
-        quadrature: DetectorQuadrature,
-        include_per_rod_evidence: bool = False,
-    ) -> DetectorPixelMass:
-        """Integrate detailed per-rod pixel evidence after explicit opt-in."""
-
-        self._require_sampled_positions()
-
-        if include_per_rod_evidence is not True:
-            raise ValueError(
-                "per-rod pixel evidence is disabled by default; pass "
-                "include_per_rod_evidence=True explicitly"
-            )
-
-        if not isinstance(quadrature, DetectorQuadrature):
-            raise TypeError("quadrature must be DetectorQuadrature")
-        if quadrature.method is not PixelIntegrationMethod.FIXED_NUMPY:
-            raise ValueError("source-averaged pixel integration requires fixed_numpy")
-        if (
-            quadrature.fold_gauss_order != quadrature.pixel_gauss_order
-            or quadrature.fold_subdivision_count != 1
-        ):
-            raise ValueError("source-averaged integration does not apply a second fold rule")
-        if branch not in {1, 2}:
-            raise ValueError("branch must be 1 or 2")
-        if any(rod.family_m == 0 for rod in self._rods):
-            raise ValueError("branch-specific pixel integration cannot include m=0")
-        rows, columns = self._instrument.detector_shape_rc
-        offset, one_dimensional_weight = _subdivided_legendre_rule(
-            quadrature.pixel_gauss_order,
-            1,
-        )
-        node_weight = one_dimensional_weight[:, None] * one_dimensional_weight[None, :]
-        image = np.zeros((rows, columns), dtype=np.float64)
-        per_rod_mass = np.zeros(len(self._rods), dtype=np.float64)
-        column_center = np.arange(columns, dtype=np.float64)
-        if self._evaluator_blocks:
-            self._evaluator_blocks[0][0].evaluator.evaluate(
-                np.empty(0, dtype=np.float64),
-                np.empty(0, dtype=np.float64),
-                branch=branch,
-            )
-        executor = self._thread_pool()
-        try:
-            for row_start in range(0, rows, quadrature.row_chunk_size):
-                row_stop = min(row_start + quadrature.row_chunk_size, rows)
-                row_center = np.arange(row_start, row_stop, dtype=np.float64)
-                node_column, node_row = np.broadcast_arrays(
-                    column_center[None, :, None, None] + offset[None, None, None, :],
-                    row_center[:, None, None, None] + offset[None, None, :, None],
-                )
-                node_shape = node_column.shape
-                flat_density, flat_caustic, _ = self._evaluate_flat_coordinates(
-                    np.ascontiguousarray(node_column.reshape(-1)),
-                    np.ascontiguousarray(node_row.reshape(-1)),
-                    branch=branch,
-                    executor=executor,
-                )
-                if np.any(flat_caustic):
-                    raise FloatingPointError(
-                        "a pixel quadrature node lies on a caustic; choose another even order"
-                    )
-                tile_per_rod = np.sum(
-                    flat_density.reshape((*node_shape, len(self._rods)))
-                    * node_weight[None, None, :, :, None],
-                    axis=(2, 3),
-                    dtype=np.float64,
-                )
-                image[row_start:row_stop] = np.sum(
-                    tile_per_rod,
-                    axis=-1,
-                    dtype=np.float64,
-                )
-                per_rod_mass += np.sum(tile_per_rod, axis=(0, 1), dtype=np.float64)
-        finally:
-            if executor is not None:
-                executor.shutdown(wait=True)
-        return DetectorPixelMass(
-            image_A2=image,
-            rods=self._rods,
-            branch=branch,
-            per_rod_detector_mass_A2=per_rod_mass,
-            total_detector_mass_A2=fsum(per_rod_mass),
-            quadrature=quadrature,
-            coordinate_evaluation_count=rows * columns * quadrature.pixel_gauss_order**2,
-            execution_backend="numba_source_averaged.v1",
         )
 
 

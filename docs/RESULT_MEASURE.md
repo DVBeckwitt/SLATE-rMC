@@ -23,9 +23,9 @@ geometry, structure and optical state. Recompile after changing those inputs.
 
 This named model is available through the CPU compiled evaluator and explicit
 sparse-term reduction. It does not silently redefine the older flat-latent
-mosaic APIs, CUDA mosaic model, or immutable reference results. The permanent
-proofs check spherical mass, signed two-atom interference, sparse/compiled
-nonzero agreement, and positive caustics independently.
+mosaic APIs, CUDA mosaic model, or immutable reference results. Archived independent
+evidence checks spherical mass, signed two-atom interference, sparse/compiled nonzero
+agreement, and positive caustics; no permanent proof suite is retained.
 
 For the six-sample physical-intensity refit, the declared observable is raw
 counts averaged over each fixed detector-area region:

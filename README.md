@@ -13,6 +13,8 @@ each rod and incident state.
 The selected geometry, mosaic, ordered-SF and disorder workflow and its scientific
 limits are summarized in [Architecture](docs/ARCHITECTURE.md#selected-fitting-workflow).
 Use [the staged fitting guide](docs/STAGED_FITTING.md) for executable recipes and ordered/disorder controls.
+For the measured lessons, background decisions and current manuscript figures with error bars,
+read [Fitting workflow and figures](docs/FITTING_WORKFLOW.md).
 Add no parallel fitting or physics pipeline.
 
 ## Quick start

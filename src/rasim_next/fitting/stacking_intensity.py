@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from math import pi
-from operator import index
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from painted_ewald import Rod
-from painted_ewald.validation import reject_complex
+from painted_ewald.validation import positive_integer, reject_complex
 from rasim_next.core.contracts import (
     EventIntensityNormalization,
     EventIntensityResult,
@@ -61,16 +60,6 @@ def _readonly_int(value: ArrayLike, shape: tuple[int | None, ...], name: str) ->
     ):
         raise ValueError(f"{name} has the wrong shape")
     result.setflags(write=False)
-    return result
-
-
-def _positive_integer(value: int, name: str) -> int:
-    try:
-        result = index(value)
-    except TypeError as error:
-        raise ValueError(f"{name} must be a positive integer") from error
-    if isinstance(value, (bool, np.bool_)) or result < 1:
-        raise ValueError(f"{name} must be a positive integer")
     return result
 
 
@@ -128,7 +117,7 @@ def _pbi2_fixed_parent_model_revision(
     source_revision = _sha256_revision(source_cif_sha256, "source_cif_sha256")
     if crystal.source_sha256 != source_revision:
         raise ValueError("source_cif_sha256 does not identify the supplied PbI2 crystal")
-    layer_count = _positive_integer(layers, "layers")
+    layer_count = positive_integer(layers, "layers")
     if len(extract_pbi2_motifs(crystal)) != 1:
         raise ValueError("five-parent PbI2 strength requires one trilayer motif per unit cell")
     return canonical_revision_sha256(
@@ -165,7 +154,7 @@ class Pbi2ParentMixtureStrength:
     def __post_init__(self) -> None:
         if not isinstance(self.crystal, CrystalStructure):
             raise TypeError("crystal must be CrystalStructure")
-        layer_count = _positive_integer(self.layers, "layers")
+        layer_count = positive_integer(self.layers, "layers")
         fraction = _readonly_float(
             self.domain_fraction,
             (len(STACKING_COMPONENT_IDS),),
@@ -411,7 +400,7 @@ def _compile_pbi2_population_profile_components(
 
     if not isinstance(crystal, CrystalStructure):
         raise TypeError("crystal must be CrystalStructure")
-    layer_count = _positive_integer(layers, "layers")
+    layer_count = positive_integer(layers, "layers")
     hk = _readonly_int(signed_hk, (None, 2), "signed_hk")
     if hk.shape[0] == 0:
         raise ValueError("signed_hk must be nonempty")

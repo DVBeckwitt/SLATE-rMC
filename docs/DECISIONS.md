@@ -161,10 +161,10 @@ density an explicit public result. Fixed macrobin rendering consumes only that r
 applies one terminal box quadrature; it no longer carries a per-rod pixel tensor. The configured
 diagnostic is therefore `rasim-configured-result-v2` and omits the former per-rod image and derived
 per-family pixel masses. The detailed per-rod coordinate result remains available for scientific
-proof without becoming the production rendering interface. The former source-averaged per-rod
-native-pixel integrator fails closed unless a caller explicitly requests
-`include_per_rod_evidence=True`; no configured renderer sets that proof-only flag. No v1
-compatibility raster is retained.
+proof without becoming the production rendering interface. The source-averaged per-rod
+native-pixel proof terminal had no configured renderer or UI consumer and retired in the
+October 8, 2026 cleanup. Its implementation remains in Git at `5ea105f`. The one-source and
+conditional native integrators remain live. No v1 compatibility raster is retained.
 
 Selected-center fitting and native-center display sampling are additional terminal consumers of the
 same completed field. Every source intensity is reduced before any dataset scale, normalization,

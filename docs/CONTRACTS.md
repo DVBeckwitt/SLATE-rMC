@@ -34,7 +34,9 @@ failure during deposition can leave partial contents, which the caller must disc
 `native_pixel_bounds` encloses the existing column-conditioned traversal and returns half-open
 row/column bounds, or `None` when no pixel is visited. It uses no intensity threshold and retains
 off-panel centers. These are storage controls, not angular error bounds or new physical measures.
-The research and full-image qualification gates are in `tasks/44_ewald_integration_research.md`.
+The preserved research/full-image qualification gates are in
+[VALIDATION.md](VALIDATION.md#historical-full-image-comparison-gates). Historical T44
+implementation records are archived as described in [REPOSITORY_HISTORY.md](REPOSITORY_HISTORY.md).
 
 Near-unit-correlation Gaussian corners use complementary residuals from the signed
 unit-correlation limit, following Genz (2004). Cache representation is fixed per
@@ -206,10 +208,9 @@ air wavelength, strict root classification, material optics, and compiled instru
 
 Owns an ordered tuple of complete incident-state measures. Its arbitrary-coordinate evaluator sums
 independent source intensities over all retained roots. Detector-visible `m=0` is admitted only when
-every contributing top-exit state proves the positive direct-root gap. Its quantitative native-pixel
-integrator is deliberately branch-specific and rejects any model containing `m=0`; the configured
-all-root macrobin path is an explicitly nonquantitative display preview. Source state order and
-weights are preserved; wavelength-dependent evaluators are never collapsed geometrically.
+every contributing top-exit state proves the positive direct-root gap. The configured all-root
+macrobin path is an explicitly nonquantitative display preview. Source state order and weights are
+preserved; wavelength-dependent evaluators are never collapsed geometrically.
 
 `sample_native_pixel_mass(*, draws_per_source_state, seed, execution_backend,
 cancel_requested=None)` is the optional all-root stochastic terminal. Every valid canonical source
@@ -272,10 +273,10 @@ detector or its source/rod identity. CUDA coordinate chunk size is an explicit p
 is rejected for CPU execution. Both controls may change work partitioning but never the declared
 measure, source order, or accepted observable beyond its frozen backend tolerance.
 
-The source-averaged `integrate_native_pixels(...)` method is a detailed per-rod proof path, not a
-production renderer. It fails closed unless the caller explicitly passes
-`include_per_rod_evidence=True`. The detailed arbitrary-coordinate evaluator remains available
-without that flag because it performs no pixel integration.
+The unused source-averaged per-rod `integrate_native_pixels(...)` proof terminal retired in the
+October 8 cleanup; its implementation is preserved in Git. The detailed arbitrary-coordinate
+evaluator, one-incident-state pixel integrator, native conditional integrator and stochastic
+terminal retain their distinct live contracts.
 
 `evaluate_detector_coordinates_geometry(...)` owns the geometry-only native-coordinate inverse
 map, and `map_ewald_geometry_to_detector(...)` owns the corresponding forward exit/refraction and

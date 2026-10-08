@@ -74,8 +74,9 @@ See [docs/VALIDATION.md](docs/VALIDATION.md) for the current assessment policy.
 
 Read the assigned scope, `docs/ARCHITECTURE.md`, `docs/CONTRACTS.md`,
 `docs/CONVENTIONS.md`, `docs/RESULT_MEASURE.md` and `docs/VALIDATION.md`.
-Read the relevant coordinate, physics-ledger, trace and example sections when the change
-touches those boundaries. For worktrees also read `WORKTREE_LAUNCH.md`.
+For fitting, background, uncertainty or manuscript figures, also read
+`docs/FITTING_WORKFLOW.md`. Read the relevant coordinate, physics-ledger, trace and example
+sections when the change touches those boundaries. For worktrees also read `WORKTREE_LAUNCH.md`.
 Historical tasks and reports are evidence, not active execution instructions.
 
 ## Numerical authority
@@ -152,7 +153,9 @@ test/proof evaluator is supplied. See [docs/DREAM_RSI.md](docs/DREAM_RSI.md).
 
 ## Worktree isolation
 
-Keep one local branch, `main`. Reuse a suitable free isolated worktree from current main,
+Keep `main` and the explicitly authorized `codex/desktop-ui-implementation` branch.
+Preserve the UI branch and its active checkout; do not merge or reset it during core cleanup.
+Reuse a suitable free isolated worktree from current main,
 accounting for all existing changes first. An isolated checkout may use detached HEAD;
 review its coherent commit and fast-forward main after checking both checkouts are clean.
 Preserve ongoing or paused work and never resume retired scientific tasks implicitly.
@@ -181,7 +184,8 @@ one JSON manifest. No sidecars or diagnostic directories.
 - Perform only the external checks needed for concrete remaining risks; report their scope.
 - Preserve fitting qualification states and physical constraints.
 - Report added/deleted lines separately for production and retired development infrastructure.
-- End with one coherent commit, a clean main checkout and one local main branch.
+- End with one coherent commit, a clean main checkout and only the local `main` and
+  `codex/desktop-ui-implementation` branches. Preserve the UI checkout's ongoing changes.
 
 Report the commit, behavior changed, checks performed and remaining limitations. Do not claim
 numerical validation from software checks. End the Codex response with exactly READY or BLOCKED.

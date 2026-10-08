@@ -1,4 +1,4 @@
-"""Finite full-state and exact reduced stacking intensities."""
+"""Exact reduced finite-stack intensities."""
 
 from __future__ import annotations
 
@@ -21,7 +21,6 @@ from rasim_next.stacking.transition import (
     RegistryPhaseModel,
     TransitionLaw,
     _validated_registry_phase,
-    full_transition_matrix,
     registry_phase,
 )
 
@@ -84,8 +83,8 @@ def _finite_moment_intensity(
 ) -> float | NDArray[np.float64]:
     """Exact centered registry-gauge recurrence for arrays or compiled scalar lanes.
 
-    Inputs are validated by the caller. CPU and CUDA compile this same arithmetic;
-    the independent full-state recurrence remains the proof oracle.
+    Inputs are validated by the caller. CPU and CUDA compile this same arithmetic.
+    Independent full-state and enumeration evidence is archived in Git.
     """
 
     inverse = omega.real - 1j * omega.imag
@@ -170,54 +169,6 @@ def _finite_moment_intensity(
     return probability_plus * (variance_plus + abs(mean_plus) ** 2) + probability_minus * (
         variance_minus + abs(mean_minus) ** 2
     )
-
-
-def _full_moment_intensity(
-    layers: int,
-    amplitudes: NDArray[np.complex128],
-    vertical_phase: complex,
-    transition: NDArray[np.float64],
-    initial: InitialPopulation,
-) -> NDArray[np.float64]:
-    """Propagate exact state-conditioned amplitude moments for one event."""
-
-    probability = np.array(
-        [initial.plus, 0.0, 0.0, initial.minus, 0.0, 0.0],
-        dtype=np.float64,
-    )
-    mean = np.zeros(6, dtype=np.complex128)
-    mean[0] = amplitudes[0]
-    mean[3] = amplitudes[3]
-    variance = np.zeros(6, dtype=np.float64)
-    phase_power = 1.0 + 0.0j
-    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
-        for _ in range(1, layers):
-            phase_power *= vertical_phase
-            contribution = phase_power * amplitudes
-            incoming_weight = probability[:, None] * transition
-            next_probability = incoming_weight.sum(axis=0)
-            candidate_mean = mean[:, None] + contribution[None, :]
-            next_mean = np.divide(
-                np.sum(incoming_weight * candidate_mean, axis=0),
-                next_probability,
-                out=np.zeros(6, dtype=np.complex128),
-                where=next_probability > 0.0,
-            )
-            next_variance = np.divide(
-                np.sum(
-                    incoming_weight
-                    * (variance[:, None] + np.abs(candidate_mean - next_mean[None, :]) ** 2),
-                    axis=0,
-                ),
-                next_probability,
-                out=np.zeros(6, dtype=np.float64),
-                where=next_probability > 0.0,
-            )
-            probability = next_probability
-            mean = next_mean
-            variance = next_variance
-        intensity = np.sum(probability * (variance + np.abs(mean) ** 2))
-    return _readonly_nonnegative(intensity, "finite full moment intensity")
 
 
 def finite_intensity_reduced(
@@ -312,43 +263,6 @@ def finite_intensity_reduced(
         result,
         "finite reduced moment intensity",
     )
-
-
-def finite_intensity_full(
-    layers: int,
-    f_plus: complex,
-    f_minus: complex,
-    omega: complex,
-    vertical_phase: complex,
-    law: TransitionLaw,
-    initial: InitialPopulation,
-) -> NDArray[np.float64]:
-    """Evaluate a stable six-state finite moment recurrence for one event."""
-
-    count = _layers(layers)
-    f_plus_array, f_minus_array, omega_array, phase_array = _broadcast_inputs(
-        f_plus, f_minus, omega, vertical_phase
-    )
-    if f_plus_array.ndim or f_minus_array.ndim or omega_array.ndim or phase_array.ndim:
-        raise ValueError("full-state oracle accepts one event")
-    omega_value = complex(omega_array)
-    amplitudes = np.array(
-        [
-            complex(f_plus_array),
-            omega_value * complex(f_plus_array),
-            omega_value**2 * complex(f_plus_array),
-            complex(f_minus_array),
-            omega_value * complex(f_minus_array),
-            omega_value**2 * complex(f_minus_array),
-        ],
-        dtype=np.complex128,
-    )
-    amplitude_intensity = np.abs(amplitudes) ** 2
-    phase_value = complex(phase_array)
-    transition = full_transition_matrix(law)
-    if np.any(~np.isfinite(amplitude_intensity)):
-        raise ValueError("full-state intensity must remain finite")
-    return _full_moment_intensity(count, amplitudes, phase_value, transition, initial)
 
 
 def _event_phases(

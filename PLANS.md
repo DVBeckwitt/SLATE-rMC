@@ -24,6 +24,7 @@ fitting, new-acquisition preparation and daily use, each with dependencies and a
 Milestones group capabilities without blocking independent tasks. Simulator completion covers both
 configured and native physical-input routes; new-acquisition preparation has a separate scientific
 decision point before its implementation can be estimated.
-It is the current plan for this UI work; implementation has not started. Its checklist is kept in that
-same document. Historical `tasks/plan.md`, `tasks/todo.md` and fitting roadmaps retain
-their original evidence and do not schedule additional scientific work.
+Implementation is active on `codex/desktop-ui-implementation`; its working checklist belongs
+to that branch. Preserve its checkout and uncommitted edits. The current scientific procedure is
+[the fitting and figure guide](docs/FITTING_WORKFLOW.md). Historical task plans and prompts are
+[archived](docs/REPOSITORY_HISTORY.md); they do not schedule additional scientific work.

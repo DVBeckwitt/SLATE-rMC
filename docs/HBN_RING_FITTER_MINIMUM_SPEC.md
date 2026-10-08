@@ -1,6 +1,8 @@
-> Historical record: task instructions and test/proof commands below describe earlier
-> revisions. Current `AGENTS.md` and `docs/VALIDATION.md` supersede those workflows;
-> this file does not authorize launching or recreating them.
+> Historical design specification. Task paths below refer to the archived tree at
+> `5ea105f`, not new execution instructions. See [repository history](REPOSITORY_HISTORY.md)
+> and the current [architecture](ARCHITECTURE.md) for implemented owners.
+> Current `AGENTS.md` and `VALIDATION.md` supersede the historical task and test/proof
+> workflows below; this file does not authorize launching or recreating them.
 
 # Spec: minimum cohesive hBN ring fitter
 

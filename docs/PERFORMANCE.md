@@ -116,7 +116,7 @@ authoritative 5--25-degree acquisition.
 
 ## Progressive full-native Monte Carlo
 
-Task [T19](../tasks/19_fluid_detector_viewer.md) separates immutable detector physics from one
+The progressive viewer (historical [T19](REPOSITORY_HISTORY.md)) separates immutable detector physics from one
 explicit mutable, thread-confined `CompiledMonteCarloDetectorSampler`. Draw-count changes generate
 only the missing fixed-width Philox prefix. Detector-pose changes compile one batched projection,
 swap only four projection arrays, and reset sampling while retaining source/rod/transport/physics
