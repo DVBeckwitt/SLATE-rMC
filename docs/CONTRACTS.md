@@ -1343,7 +1343,10 @@ Inspection connects existing Hold/Follow, exact Profiles/ROI and exact export ow
 Saved configured native-cell results can be reopened for comparison through the existing
 hashed-result reader. Compatibility requires the same declared measure, entire instrument
 geometry/frame/support and native shape; no alignment, rebinning or model/count residual
-admission is implied. Shared native-cell limits are explicit. Recorded-launch export uses
+admission is implied. Shared display-sum bins, mode and limits are explicit and fixed across comparison resize/zoom.
+Both panes reuse their worker-prepared sums at the same selected bin; Auto 99% uses only
+the displayed snapshot as one shared scale anchor. Manual/full-range controls affect both
+panes without normalization; exact native arrays and identities remain unchanged. Recorded-launch export uses
 the displayed frame's immutable declaration, including historical inputs, and invents no
 desktop Monte Carlo CLI equivalent. Native saved comparison without a bound geometry
 identity remains unavailable.

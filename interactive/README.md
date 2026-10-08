@@ -326,9 +326,11 @@ mapping; its note identifies display binning and the fraction of positive displa
 above Upper. **Display exposure** changes presentation limits only.
 
 Open **Inspection** for Hold/Follow, exact Profiles/ROI, snapshot export and recorded provenance.
-**Compare saved result** opens a frozen pair with shared native-cell display limits after
+**Compare saved result** opens a frozen pair with shared display-sum bins, mode and limits after
 checking declared measure, detector geometry/frame and sample support. It does not align images
-or compare acquisition counts with model mass. Native recipes without an admitted geometry
+or compare acquisition counts with model mass. Both panes use the same selected sum bin, fixed
+across resize/zoom. Shared Auto 99% uses the displayed snapshot as its scale anchor; Low/Upper,
+mode and Full range adjust both panes together. Exact arrays are unchanged. Native recipes without an admitted geometry
 identity and macrobin/auxiliary routes display their unavailable reason. **Compare acquisitions**
 opens the existing acquisition comparison workspace. **Export recorded launch** saves the
 displayed result's exact configuration and manifest, including historical inputs after edits;

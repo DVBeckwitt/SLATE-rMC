@@ -4,8 +4,10 @@ import json
 
 import yaml
 from detector_panel import DetectorTextureView
+from project_state import validate_display_limits
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QFileDialog,
     QHBoxLayout,
@@ -16,7 +18,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from simulation_contrast import ColorLegend, display_limits
+from simulation_display import select_display_level
 from simulation_state import SimulationDraft
+from simulation_widgets import NumberEdit
 
 
 def snapshot_state(frame, current_draft, *, held=False):
@@ -77,6 +82,13 @@ class SnapshotInspection(QWidget):
         self.comparison_views = ()
         self.compared_frame = None
         self.comparison_limits = None
+        self.comparison_controls = None
+        self.comparison_error = None
+        self.comparison_bin = None
+        self.comparison_mode = None
+        self.comparison_note = None
+        self.comparison_legend = None
+        self.comparison_low = self.comparison_high = None
         self._context_attempt = 0
         self.comparison_timer = QTimer(self)
         self.comparison_timer.setSingleShot(True)
@@ -143,6 +155,8 @@ class SnapshotInspection(QWidget):
                 self.compare_button.setEnabled(False)
                 self.availability.setText(reason + " " + str(exc))
                 self.compare_button.setToolTip(str(exc))
+        if self.comparison_error is not None:
+            self.availability.setText(self.comparison_error)
         if frame is None:
             self.provenance.setPlainText(
                 "No displayed result. Load a draft or reopen its saved image."
@@ -190,8 +204,15 @@ class SnapshotInspection(QWidget):
                     "Compare rejected: measure, detector geometry/frame or sample support differs"
                 )
         except (ValueError, AttributeError) as exc:
-            self.availability.setText(str(exc))
+            self.comparison_error = str(exc)
             self.simulator.status.setText(str(exc))
+            self.availability.setText(str(exc))
+            return
+        common_bins = {level.bin_size for level in self.simulator.frame.display_levels} & {
+            level.bin_size for level in frame.display_levels
+        }
+        if not common_bins:
+            self.availability.setText("Comparison unavailable: no common prepared display bins")
             return
         self.clear_comparison()
         self.reference = frame
@@ -201,25 +222,52 @@ class SnapshotInspection(QWidget):
         dialog.setWindowTitle("Compatible saved snapshots — shared display limits, raw values")
         dialog.resize(1120, 680)
         body = QVBoxLayout(dialog)
-        view = self.simulator.detector.view
-        native = view.active_display_level is None or view.active_display_level.bin_size == 1
-        self.comparison_limits = (
-            (view.low_value, view.high_value, view.contrast_mode)
-            if native
-            else (self.compared_frame.low, self.compared_frame.high, "linear")
+        self.comparison_note = QLabel()
+        self.comparison_note.setWordWrap(True)
+        body.addWidget(self.comparison_note)
+        source = self.simulator.detector.view
+        self.comparison_source_bin = (
+            None if source.active_display_level is None else source.active_display_level.bin_size
         )
-        low, high, mode = self.comparison_limits
-        body.addWidget(
-            QLabel(
-                f"{frame.measure}\nShared {mode} native-cell limits [{low:.7g}, {high:.7g}]; "
-                + (
-                    "copied from current native-cell display"
-                    if native
-                    else "native full range of displayed snapshot; aggregated display limits not reused"
-                )
-                + "; no per-image normalization. Frozen comparison of displayed identities."
-            )
+        self.comparison_limits = source.low_value, source.high_value, source.contrast_mode
+        self.comparison_controls = QWidget()
+        controls = QHBoxLayout(self.comparison_controls)
+        controls.setContentsMargins(0, 0, 0, 0)
+        self.comparison_bin = QComboBox()
+        self.comparison_bin.setAccessibleName("Shared comparison display bin")
+        self.comparison_bin.setToolTip(
+            "Both panes use this fixed sum bin across resize/zoom. Changing bins uses shared Auto 99% of the displayed snapshot."
         )
+        for size in sorted(common_bins):
+            self.comparison_bin.addItem(f"{size} x {size} sum", size)
+        self.comparison_mode = QComboBox()
+        self.comparison_mode.setAccessibleName("Shared comparison contrast mode")
+        for label, mode in (
+            ("Linear", "linear"),
+            ("Positive log", "positive_log"),
+            ("Signed", "signed"),
+        ):
+            self.comparison_mode.addItem(label, mode)
+        controls.addWidget(self.comparison_bin)
+        controls.addWidget(self.comparison_mode)
+        self.comparison_low, self.comparison_high = NumberEdit(), NumberEdit()
+        for label, field in (("Low", self.comparison_low), ("Upper", self.comparison_high)):
+            caption = QLabel(label)
+            caption.setBuddy(field)
+            field.setAccessibleName(f"Shared comparison {label.lower()} display limit")
+            controls.addWidget(caption)
+            controls.addWidget(field, 1)
+        for label, action in (
+            ("Apply", lambda: self.apply_comparison_limits(manual=True)),
+            ("Auto 99%", self.apply_comparison_limits),
+            ("Full range", lambda: self.apply_comparison_limits(full=True)),
+            ("Fit both", self.fit_comparison),
+        ):
+            button = QPushButton(label)
+            button.clicked.connect(lambda _checked=False, a=action: a())
+            controls.addWidget(button)
+        body.addWidget(self.comparison_controls)
+        self.comparison_controls.setEnabled(False)
         split = QSplitter()
         views = []
         for label, current in (("Displayed", self.compared_frame), ("Reference", frame)):
@@ -234,12 +282,16 @@ class SnapshotInspection(QWidget):
             views.append(detector)
         self.comparison_views = tuple(views)
         body.addWidget(split, 1)
+        self.comparison_legend = ColorLegend(dialog)
+        body.addWidget(self.comparison_legend)
+        self.comparison_bin.currentIndexChanged.connect(self.change_comparison_bin)
+        self.comparison_mode.currentIndexChanged.connect(self.apply_comparison_limits)
         dialog.finished.connect(self.clear_comparison)
         dialog.show()
         self._context_attempt = 0
         self.comparison_timer.start(0)
         self.availability.setText(
-            "Compatible frozen snapshots opened with shared native-cell display limits. Counts-to-model residuals remain unavailable."
+            "Compatible frozen snapshots opened with shared display-sum bins and limits. Counts-to-model residuals remain unavailable."
         )
 
     def clear_comparison(self, *_):
@@ -247,6 +299,11 @@ class SnapshotInspection(QWidget):
         dialog = self.comparison_dialog
         self.reference = self.compared_frame = self.comparison_dialog = None
         self.comparison_views = ()
+        self.comparison_controls = self.comparison_bin = self.comparison_mode = None
+        self.comparison_note = self.comparison_legend = None
+        self.comparison_low = self.comparison_high = self.comparison_limits = None
+        self.comparison_source_bin = None
+        self.comparison_error = None
         if dialog is not None:
             dialog.close()
             dialog.deleteLater()
@@ -276,11 +333,96 @@ class SnapshotInspection(QWidget):
                     frame.maximum,
                     frame.min_positive,
                 )
-                low, high, mode = self.comparison_limits
-                view.set_levels(low, high, mode=mode)
+            levels = tuple(
+                level
+                for level in self.compared_frame.display_levels
+                if self.comparison_bin.findData(level.bin_size) >= 0
+            )
+            size = max(
+                select_display_level(
+                    levels,
+                    self.compared_frame.image.shape,
+                    view._rect().width() * view.devicePixelRatioF(),
+                    view._rect().height() * view.devicePixelRatioF(),
+                ).bin_size
+                for view in self.comparison_views
+            )
+            self.comparison_bin.blockSignals(True)
+            self.comparison_bin.setCurrentIndex(self.comparison_bin.findData(size))
+            self.comparison_bin.blockSignals(False)
+            recorded_limits = self.comparison_limits
+            self.comparison_mode.blockSignals(True)
+            self.comparison_mode.setCurrentIndex(self.comparison_mode.findData(recorded_limits[2]))
+            self.comparison_mode.blockSignals(False)
+            self.change_comparison_bin()
+            if self.comparison_source_bin == size:
+                self.set_comparison_limits(
+                    *recorded_limits,
+                    "copied from displayed snapshot's same-bin contrast",
+                )
+            self.comparison_controls.setEnabled(True)
         except ValueError as exc:
             self.availability.setText(f"Comparison display unavailable: {exc}")
             self.clear_comparison()
+
+    def change_comparison_bin(self, *_):
+        if not self.comparison_views or any(view.image is None for view in self.comparison_views):
+            return
+        size = self.comparison_bin.currentData()
+        for view, frame in zip(
+            self.comparison_views, (self.compared_frame, self.reference), strict=True
+        ):
+            level = next(level for level in frame.display_levels if level.bin_size == size)
+            view.set_display_levels((level,))
+        self.apply_comparison_limits()
+
+    def apply_comparison_limits(self, *_, manual=False, full=False):
+        if not self.comparison_views or self.comparison_views[0].active_display_level is None:
+            return
+        mode = self.comparison_mode.currentData()
+        try:
+            low, high = (
+                (float(self.comparison_low.exact_text()), float(self.comparison_high.exact_text()))
+                if manual
+                else display_limits(self.comparison_views[0].active_display_level, mode, full=full)
+            )
+            self.set_comparison_limits(
+                low,
+                high,
+                mode,
+                "manual shared limits"
+                if manual
+                else "displayed snapshot full range"
+                if full
+                else "displayed snapshot Auto 99%",
+            )
+        except ValueError as exc:
+            self.comparison_note.setText(f"Display error: {exc}; choose valid limits or Auto 99%")
+
+    def set_comparison_limits(self, low, high, mode, anchor):
+        validate_display_limits(low, high, mode)
+        for view in self.comparison_views:
+            view.set_levels(low, high, mode=mode)
+        self.comparison_limits = low, high, mode
+        self.comparison_low.setText(repr(low))
+        self.comparison_high.setText(repr(high))
+        legend = self.comparison_legend
+        legend.low, legend.high, legend.mode = low, high, mode
+        legend.update()
+        size = self.comparison_bin.currentData()
+        unit = (
+            "angstrom^2/pixel^2 display density"
+            if self.compared_frame.draft.route == "pixel_centers"
+            else "angstrom^2 simulation mass"
+        )
+        self.comparison_note.setText(
+            f"{self.compared_frame.measure}\nShared {mode} [{low:.7g}, {high:.7g}] in sums of {size} x {size} native display cells ({unit}; edge bins may be smaller).\n"
+            f"Binning fixed across resize/zoom; scale anchor: {anchor}. No per-image normalization. Raw native arrays/identities unchanged."
+        )
+
+    def fit_comparison(self):
+        for view in self.comparison_views:
+            view.fit_image()
 
     def export_launch(self):
         frame = self.simulator.frame

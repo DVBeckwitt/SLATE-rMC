@@ -9,6 +9,22 @@ from PySide6.QtWidgets import QDoubleSpinBox, QHBoxLayout, QLabel, QPushButton, 
 from simulation_widgets import NumberEdit
 
 
+def display_limits(level, mode, *, full=False):
+    if mode == "positive_log":
+        if not level.positive_count or level.maximum <= FLOAT32_NORMAL_MIN:
+            raise ValueError(
+                "Positive log unavailable: no positive display signal in the shader range"
+            )
+        low = max(float(level.positive_quantiles[0]), FLOAT32_NORMAL_MIN)
+        return low, max(level.maximum, low * 1.001)
+    if mode == "signed":
+        extent = max(abs(level.minimum), abs(level.maximum), FLOAT32_NORMAL_MIN * 2)
+        return -extent, extent
+    if full or level.minimum < 0 or not level.positive_count:
+        return linear_display_limits(level.minimum, level.maximum)
+    return 0.0, max(float(level.positive_quantiles[990]), FLOAT32_NORMAL_MIN * 2)
+
+
 class ColorLegend(QWidget):
     """Numerical ticks for the detector shader's current transfer function."""
 
@@ -164,21 +180,6 @@ class SimulationContrast(QObject):
         self.panel.view.set_display_levels(frame.display_levels)
         self.refresh()
 
-    def limits(self, level, *, full=False):
-        if self.mode == "positive_log":
-            if not level.positive_count or level.maximum <= FLOAT32_NORMAL_MIN:
-                raise ValueError(
-                    "Positive log unavailable: no positive display signal in the shader range"
-                )
-            low = max(float(level.positive_quantiles[0]), FLOAT32_NORMAL_MIN)
-            return low, max(level.maximum, low * 1.001)
-        if self.mode == "signed":
-            extent = max(abs(level.minimum), abs(level.maximum), FLOAT32_NORMAL_MIN * 2)
-            return -extent, extent
-        if full or level.minimum < 0 or not level.positive_count:
-            return linear_display_limits(level.minimum, level.maximum)
-        return 0.0, max(float(level.positive_quantiles[990]), FLOAT32_NORMAL_MIN * 2)
-
     def refresh(self, *_):
         level = self.panel.view.active_display_level
         if self.frame is None or level is None:
@@ -187,8 +188,10 @@ class SimulationContrast(QObject):
             key = self.mode, level.bin_size
             try:
                 if key not in self._anchors and (level.positive_count or level.minimum < 0):
-                    self._anchors[key] = self.limits(level)
-                low, high = self._anchors[key] if key in self._anchors else self.limits(level)
+                    self._anchors[key] = display_limits(level, self.mode)
+                low, high = (
+                    self._anchors[key] if key in self._anchors else display_limits(level, self.mode)
+                )
                 self.panel.view.set_levels(low, high, mode=self.mode)
                 self._base = low, high
             except ValueError as exc:
@@ -321,7 +324,7 @@ class SimulationContrast(QObject):
         if level is None:
             return
         try:
-            low, high = self.limits(level, full=True)
+            low, high = display_limits(level, self.mode, full=True)
             self.panel.view.set_levels(low, high, mode=self.mode)
         except ValueError as exc:
             self.show_error(str(exc))
