@@ -5,13 +5,14 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Iterator
 from concurrent.futures import CancelledError
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from functools import partial
 from itertools import pairwise
 
 import numba
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
+from scipy.sparse import csr_matrix
 
 from painted_ewald import MosaicParameters, Rod
 from painted_ewald.normal_density import SphericalMosaicDensity
@@ -43,6 +44,7 @@ from rasim_next.pipeline.fiber_detector import (
 )
 from rasim_next.pipeline.pixel_error import iter_pixel_error_batches
 from rasim_next.pipeline.source_spatial import (
+    NativeSpatialRegionProjection,
     validate_conditional_spatial_support,
 )
 from rasim_next.pipeline.spatial_execution import NativeSpatialExecutor
@@ -257,6 +259,47 @@ def _event_mass(
 
 
 @dataclass(frozen=True, slots=True)
+class NativeFixedResponse:
+    """Immutable nominal geometry probabilities; candidate factors stay separate."""
+
+    revision: str
+    observation_count: int
+    grids: tuple[FiberStrengthGrid, ...]
+    blocks: tuple[tuple[FiberResponseNodes, csr_matrix], ...]
+    retained_bytes: int
+
+    def evaluate(
+        self, detector: ConditionalStructureDetector, projection: NativePixelRegionProjection
+    ) -> FloatArray:
+        if self.revision != detector.native_response_revision(projection):
+            raise ValueError("fixed response does not match current geometry, optics or projection")
+        tables = [
+            detector._strength_table(
+                grid, detector.strength_model, detector.instrument.film_thickness_A
+            )
+            for grid in self.grids
+        ]
+        density = SphericalMosaicDensity(detector.mosaic)
+        result = np.zeros(self.observation_count)
+        for nodes, probability in self.blocks:
+            mass = _event_mass(
+                nodes,
+                tables[nodes.grid_index],
+                density,
+                detector.instrument.film_thickness_A,
+                detector.intensity_envelope,
+                detector.phase_population_weight
+                * detector.polarization_weight
+                * detector.incident.states.source_weight[nodes.source_state_index],
+                detector.integration_rule.cone_quadrature_order,
+            )
+            result += probability.T @ mass
+        if np.any(~np.isfinite(result)) or np.any(result < 0):
+            raise FloatingPointError("invalid complete fixed native response")
+        return result
+
+
+@dataclass(frozen=True, slots=True)
 class ConditionalStructureDetector:
     """Shared source/SF/optical continuum for native fits and full-panel images."""
 
@@ -373,7 +416,7 @@ class ConditionalStructureDetector:
                 ("basis", basis),
                 ("rods", np.array([(r.h, r.k, r.population) for r in rods])),
                 ("rod_catalog", self.rod_catalog_revision),
-                ("engine", "positive_strength_gauss_pixel_error.v1"),
+                ("engine", rule.regular_rule),
                 ("strength_measure_revision", self.strength_model.structure_model_revision),
                 ("integration_rule", json.dumps(asdict(rule), sort_keys=True, allow_nan=False)),
                 ("overlap_measure", "none" if stack is None else stack.overlap_measure),
@@ -509,6 +552,98 @@ class ConditionalStructureDetector:
             source_state_indices=source_state_indices,
             regular_integrator=self._regular_product_batches,
             include_local_m0=include_local_m0,
+        )
+
+    def native_response_revision(self, projection):
+        """Dependency identity for explicit strength-independent geometry reuse."""
+        if self.integration_rule.regular_rule != "fixed_importance.v1":
+            raise ValueError("strength-dependent rules cannot compile a fixed response")
+        if self.spatial_execution == "cuda":
+            raise ValueError("fixed native region compilation is CPU-only; use auto or cpu")
+        states = self.incident.states
+        return canonical_revision_sha256(
+            ("definition", "fixed_importance_native_response.v1"),
+            ("projection", projection.projection_revision),
+            ("source", self.source.revision),
+            ("instrument", _instrument_revision(replace(self.instrument, film_thickness_A=0.0))),
+            ("basis", self.reciprocal_basis_Ainv),
+            ("rods", np.array([(r.h, r.k, r.population) for r in self.rods])),
+            ("wavelength", self.material.wavelength_A),
+            ("optics", self.material.n_complex),
+            ("incident_model", states.incident_model_id),
+            ("direction", states.direction_sample),
+            ("intersection", states.sample_intersection_lab_m),
+            ("polarization", states.polarization_state_id),
+            ("phase_wavevector", states.k_film_phase_sample_Ainv),
+            ("entrance", states.entrance_amplitude),
+            ("normal_wavevector", states.kz_film_Ainv),
+            ("valid", states.valid),
+            ("footprint", states.footprint_acceptance),
+            ("rule", json.dumps(asdict(self.integration_rule), sort_keys=True, allow_nan=False)),
+            ("proposal", json.dumps(asdict(self.proposal_mosaic or self.mosaic), sort_keys=True)),
+            ("spatial_rule", np.array([self.spatial_quadrature_order, self.gaussian_tail_radius])),
+            ("local_chart", self.specular_stitch_stack is not None),
+        )
+
+    def compile_native_response(self, projection, *, maximum_bytes=1024**3, cancel_requested=None):
+        """Compile region probabilities with an explicit retained-array byte cap.
+
+        Both Bragg cells and profile memberships use the same spatial owner. No
+        strength-selected nodes or detector survivor masks are reused across keys.
+        The cap includes grid/node/CSR arrays; temporary transfer/projection storage
+        and Python metadata are excluded and require a caller process-memory limit.
+        """
+        revision = self.native_response_revision(projection)
+        if type(maximum_bytes) is not int or maximum_bytes <= 0:
+            raise ValueError("response memory budget must be a positive integer")
+        spatial = NativeSpatialRegionProjection(projection)
+        grids, blocks, grid_ids = [], [], {}
+        retained_bytes = 0
+        for batch in self._batches(
+            native_projection_bounds_px(projection, self.detector_shape_rc),
+            cancel_requested,
+            include_source_mass=False,
+        ):
+            key = (
+                batch.radial_Ainv,
+                float(self.source.mean_rays.wavelength_A[batch.source_state_index]),
+            )
+            if key not in grid_ids:
+                grid_ids[key] = len(grids)
+                grids.append(self._grid(batch))
+                grid = grids[-1]
+                retained_bytes += grid.positive_axial_Ainv.nbytes
+                if grid.external_q_Ainv is not None:
+                    retained_bytes += grid.external_q_Ainv.nbytes
+            else:
+                grid = grids[grid_ids[key]]
+                expected = (
+                    grid.external_q_Ainv if batch.local_m0 is not None else grid.positive_axial_Ainv
+                )
+                if grid.rods != batch.rods or not np.array_equal(
+                    expected, batch.positive_axial_Ainv
+                ):
+                    raise ValueError("fixed response group changed its shared axial grid")
+            probability = spatial.probabilities(
+                batch.transfer.spatial,
+                quadrature_order=self.spatial_quadrature_order,
+                gaussian_tail_radius=self.gaussian_tail_radius,
+            )
+            retained = np.flatnonzero(np.diff(probability.indptr))
+            probability = probability[retained]
+            nodes = _response_nodes(batch, grid_ids[key], retained)
+            retained_bytes += sum(
+                value.nbytes
+                for field in fields(nodes)
+                if isinstance(value := getattr(nodes, field.name), np.ndarray)
+            ) + sum(a.nbytes for a in (probability.data, probability.indices, probability.indptr))
+            if retained_bytes > maximum_bytes:
+                raise MemoryError("fixed native response memory budget exhausted")
+            for array in (probability.data, probability.indices, probability.indptr):
+                array.setflags(write=False)
+            blocks.append((nodes, probability))
+        return NativeFixedResponse(
+            revision, projection.observation_count, tuple(grids), tuple(blocks), retained_bytes
         )
 
     def _regular_strength_at(self, axial, *, rods, wavelength):

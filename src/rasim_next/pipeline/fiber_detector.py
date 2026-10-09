@@ -1235,14 +1235,15 @@ class FiberQuadratureNodes:
 
 
 @numba.njit(nogil=True, fastmath=False, cache=False)
-def _local_m0_importance_block(axial, pdf, unit, first, last, bounds, centers, widths, strata):
+def _importance_block(q, pdf, quantiles, first, last, bounds, centers, widths):
     """Conditional disjoint-arc importance measure; no physical factors or pruning."""
+    strata = quantiles.shape[1]
     index = np.empty((last - first) * strata, dtype=np.int64)
     azimuth = np.empty(len(index))
     mass = np.empty(len(index))
     count = 0
     for i in range(first, last):
-        left, right = _angular_intervals(axial[i], bounds)
+        left, right = _angular_intervals(q[i], bounds)
         if not len(left):
             continue
         offsets = np.array(
@@ -1261,7 +1262,7 @@ def _local_m0_importance_block(axial, pdf, unit, first, last, bounds, centers, w
         if not np.isfinite(total) or total <= 0 or not np.isfinite(pdf[i]) or pdf[i] <= 0:
             raise ValueError("local-m0 importance proposal requires finite positive densities")
         for j in range(strata):
-            target = (j + unit[i, 1]) * total / strata
+            target = quantiles[i, j] * total
             k, cumulative = 0, 0.0
             while k < len(arc_mass) and target >= cumulative + arc_mass[k]:
                 cumulative += arc_mass[k]
@@ -1310,7 +1311,7 @@ def _local_m0_importance_block(axial, pdf, unit, first, last, bounds, centers, w
                     cdf_left[k] + arc_mass[k],
                 )
             index[count], azimuth[count] = i, phi
-            mass[count] = total / (len(axial) * strata * pdf[i] * density)
+            mass[count] = total / (len(q) * strata * pdf[i] * density)
             count += 1
     return index[:count], azimuth[:count], mass[:count]
 
@@ -1376,17 +1377,17 @@ def iter_local_m0_coordinates(
     )
     if importance:
         strata = 2**angular_power
+        quantiles = (np.arange(strata)[None, :] + unit[:, 1, None]) / strata
         for first in range(0, len(axial), batch_size // strata):
-            index, phi, weight = _local_m0_importance_block(
+            index, phi, weight = _importance_block(
                 axial,
                 pdf,
-                unit,
+                quantiles,
                 first,
                 min(first + batch_size // strata, len(axial)),
                 np.asarray(source_region_bounds),
                 centers,
                 widths,
-                strata,
             )
             if len(index):
                 yield FiberQuadratureNodes(axial, index, phi, weight)
@@ -1424,14 +1425,68 @@ def iter_local_m0_coordinates(
             yield FiberQuadratureNodes(axial, global_index, phi, mass[global_index] * angular_mass)
 
 
+def iter_fixed_fiber_coordinates(*, coordinate_parameters, rule, source_index, group_index):
+    """Strength-independent nominal du dphi rule, with full proposal support.
+
+    The versioned proposal uses equal Cauchy peaks spaced by b3, width .02*b3,
+    and a .2 uniform mass. Original source/group indices fix the scramble/rotation.
+    No sampled strength, actual mosaic, or surviving detector event selects nodes.
+    """
+    p = coordinate_parameters
+    count = 2**rule.regular_angular_power
+    unit = qmc.Sobol(
+        2, scramble=True, seed=7919 * rule.regular_seed + 65537 * group_index + 1009
+    ).random_base2(rule.regular_axial_power)
+    axial, pdf = _axial_mixture_quantiles(
+        unit[:, 0],
+        *p["axial_bounds_Ainv"],
+        p["axial_peak_centers_Ainv"],
+        p["axial_peak_half_width_Ainv"],
+        np.ones(len(p["axial_peak_centers_Ainv"])),
+    )
+    radius = p["radial_Ainv"]
+    centers, widths = _angular_proposal_parameters(
+        axial,
+        radius,
+        p["ki_sample_Ainv"],
+        p["normal_sample"],
+        p["reference_mosaic"].gaussian_sigma_rad,
+        p["reference_mosaic"].lorentzian_half_width_rad,
+    )
+    rotation = np.random.default_rng(
+        8191 * source_index + 7919 * rule.regular_seed + 131 * group_index + 973
+    ).random()
+    quantiles = np.mod(unit[:, 1, None] + rotation + (np.arange(count) + 0.5) / count, 1.0)
+    q = np.hypot(radius, axial)
+    step = rule.batch_size // count
+    for first in range(0, len(axial), step):
+        index, phi, weight = _importance_block(
+            q,
+            pdf,
+            quantiles,
+            first,
+            min(first + step, len(axial)),
+            np.asarray(p["source_region_bounds"]),
+            centers,
+            widths,
+        )
+        if len(index):
+            yield FiberQuadratureNodes(axial, index, phi, weight)
+
+
 @dataclass(frozen=True, slots=True)
 class FiberIntegrationRule:
-    """The sole regular engine plus the necessary local-m0 endpoint controls.
+    """Explicit regular estimator and necessary local-m0 endpoint controls.
 
-    Regular rods use positive W du Gaussian panels and native-pixel indicators.
+    The default uses positive W du panels and native-pixel indicators.
+    Fixed importance is a separately named nominal estimator for response reuse.
     Numerical controls never remove physical peaks, tails or signed rods.
     """
 
+    regular_rule: str = "strength_gauss_pixel_error.v1"
+    regular_axial_power: int = 12
+    regular_angular_power: int = 5
+    regular_seed: int = 0
     strength_gauss_order: int = 4
     strength_scalar_order: int = 16
     strength_scalar_phase_step_rad: float = np.pi / 4
@@ -1461,6 +1516,11 @@ class FiberIntegrationRule:
     local_m0_replica: int = 0
 
     def __post_init__(self):
+        if self.regular_rule not in {"strength_gauss_pixel_error.v1", "fixed_importance.v1"}:
+            raise ValueError("unknown regular integration rule")
+        for name in ("regular_axial_power", "regular_angular_power", "regular_seed"):
+            if type(getattr(self, name)) is not int or getattr(self, name) < 0:
+                raise ValueError(f"{name} must be a nonnegative integer")
         if self.local_m0_angular_rule not in {
             "resolved_cdf_gl8.v1",
             "cdf_stratified_importance.v1",
@@ -1481,6 +1541,19 @@ class FiberIntegrationRule:
             value = getattr(self, name)
             if type(value) is not int or value < 2:
                 raise ValueError(f"{name} must be an integer of at least two")
+        if self.regular_rule == "fixed_importance.v1" and (
+            self.regular_axial_power < 11
+            or self.regular_angular_power < 5
+            or self.regular_seed >= 2**32
+            or self.batch_size < 2**self.regular_angular_power
+            or self.batch_size > 16384
+            or self.batch_size % 2**self.regular_angular_power
+            or 2 ** (self.regular_axial_power + self.regular_angular_power)
+            > self.maximum_angular_panel_nodes
+        ):
+            raise ValueError(
+                "fixed regular importance requires bounded whole strata, at least 2048 by 32"
+            )
         if (
             self.strength_gauss_order > 16
             or self.strength_scalar_order < max(8, self.strength_gauss_order)
@@ -1775,7 +1848,7 @@ def iter_conditional_fiber_transfers(
             q_lower, q_upper = frozen
         lower = np.sqrt(max(0.0, q_lower**2 - radius**2))
         upper = np.sqrt(max(0.0, q_upper**2 - radius**2))
-        spacing = b3 * rule.local_m0_peak_spacing_L
+        spacing = b3 * (rule.local_m0_peak_spacing_L if local else 1.0)
         centers = np.arange(np.floor(lower / spacing), np.ceil(upper / spacing) + 1) * spacing
         if local and rule.local_m0_axial_peak_coordinate == "film_phase_q_first_source":
             # Historical numerical proposal: first source wavelength, unchanged full support.
@@ -1817,7 +1890,8 @@ def iter_conditional_fiber_transfers(
             coordinate_parameters = dict(
                 axial_bounds_Ainv=(lower, upper),
                 axial_peak_centers_Ainv=centers,
-                axial_peak_half_width_Ainv=b3 * rule.local_m0_peak_half_width_L,
+                axial_peak_half_width_Ainv=b3
+                * (rule.local_m0_peak_half_width_L if local else 0.02),
                 radial_Ainv=radius,
                 ki_sample_Ainv=ki,
                 normal_sample=normal,
@@ -1848,6 +1922,19 @@ def iter_conditional_fiber_transfers(
                 include_source_mass=include_source_mass,
                 **context,
             )
+            if not local and rule.regular_rule == "fixed_importance.v1":
+                for nodes in iter_fixed_fiber_coordinates(
+                    coordinate_parameters=coordinate_parameters,
+                    rule=rule,
+                    source_index=si,
+                    group_index=gi,
+                ):
+                    if cancel_requested is not None and cancel_requested():
+                        raise CancelledError
+                    batch = compile_conditional_fiber_batch(nodes, **batch_parameters)
+                    if batch is not None:
+                        yield batch
+                continue
             if not local:
                 yield from regular_integrator(
                     coordinate_parameters=coordinate_parameters,

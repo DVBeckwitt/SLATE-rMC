@@ -1,6 +1,6 @@
 # Native engine migration
 
-The sole regular conditional engine now uses positive strength-weighted Gaussian
+The default regular conditional estimator uses positive strength-weighted Gaussian
 axial quadrature and native-pixel-error angular acceptance. The local-m0 physical
 endpoint chart remains. Unstitched Pb `(0,0)` rods use the same regular interior-node
 engine; no fabricated singular q=0 sample is introduced. Physical factors and observation memberships are preserved;
@@ -70,7 +70,7 @@ Plans retain `rasim-native-refinement-plan-v1`; update numerical declarations:
 | `axial_peak_spacing_L`, `axial_peak_half_width_L` | `local_m0_peak_spacing_L`, `local_m0_peak_half_width_L` |
 | `angular_resolution_fraction` | `local_m0_angular_resolution_fraction` |
 | `local_m0_angular_power=None` | Explicit former inherited angular power |
-| Ordinary selectors, manual edges/meshes and width caps | Remove; no alternate regular engine |
+| Historical ordinary selectors, manual edges/meshes and width caps | Remove; the new explicit fixed-importance rule has its own identity and controls |
 | `workers` greater than one | Set to 1; existing `prediction_workers` parallelizes candidates |
 
 Review staged `numerical_checks` and `reference_correction.numerical_override`
@@ -94,3 +94,8 @@ the same prepared kernels; native-pixel acceptance does not qualify that observa
 Covariance/rank, physical constraints, guard checks, fit qualification and selection
 states remain mandatory. Failed/timed-out streams and any accumulated prefix are
 incomplete. Migration and constructor invariants do not promote fits.
+
+The explicit `regular_rule="fixed_importance.v1"` restores a strength-independent
+nominal response option for repeated combined native fits. It is not selected by
+this migration script and does not inherit archived numerical qualification. See
+[fast combined-region fitting](NATIVE_REFINEMENT.md#explicit-fast-combined-region-fitting).

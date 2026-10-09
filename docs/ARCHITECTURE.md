@@ -6,7 +6,9 @@ Material bindings implement `NativeRefinementModel`; `native_workflow` assembles
 the shared instrument/observation owners. `native_search` owns public bounded TRF and guarded
 SLSQP, exact scale profiling and nuisance refits. `native_execution` owns raw recovery.
 `fiber_detector` separates retained scattering from detector transport; `conditional_detector`
-contracts current SF, mosaic and source masses. Gaussian probabilities have one shared
+contracts current SF, mosaic and source masses. Its explicit fixed-importance option
+reuses bounded native region probabilities while recomputing candidate factors; the
+default strength-Gauss option retains adaptive candidate preparation. Gaussian probabilities have one shared
 arithmetic owner in `source_spatial`; explicit `_source_spatial_cuda` execution changes only
 native-pixel traversal and deposition, with shared scalar probability/cancellation arithmetic. See [NATIVE_REFINEMENT.md](NATIVE_REFINEMENT.md).
 Historical layered-stage orchestration and eager fitting-package reexports have retired;
@@ -336,7 +338,8 @@ native L1 patches and reuses accepted children. `conditional_detector` contracts
 canonical signed fractions and accumulates compact native windows.
 `continuous_regions` applies original fractional memberships exactly once.
 `native_joint` retains exact completed predictions and bounded pre-projection
-scattering, without a strength-free retained detector response. Local-m0 keeps
+scattering for the adaptive estimator. Explicit fixed importance also retains bounded
+strength-independent region responses as described above. Local-m0 keeps
 its required physical endpoint chart. Reflectivity owns its named overlap measure;
 native search/accuracy retain covariance, guards and qualification. Migration is
 explicit in [ENGINE_MIGRATION.md](ENGINE_MIGRATION.md). No new dependency or permanent

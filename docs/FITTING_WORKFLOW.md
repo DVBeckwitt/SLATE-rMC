@@ -356,7 +356,11 @@ For a new combined fit, use this sequence:
    profiling, use `NativeLinearBackgroundProblem` through the Python fitting API;
    retain raw counts and the required background checks. There is no CLI switch
    that constructs this combined observation or the study's 41-knot design.
-4. Use the automatic native evaluator for that prediction. Hardware selection does
+4. For fast repeated fits on frozen geometry, explicitly select the
+   [fixed-importance response](NATIVE_REFINEMENT.md#explicit-fast-combined-region-fitting).
+   It evaluates the same combined memberships, with fresh candidate strengths and
+   mosaic factors. Its region compilation uses CPU; native raster deposition retains
+   the automatic selector. Hardware selection does
    not change memberships, covariance, weights, quadrature or nuisance definitions.
    Complete the starting prediction and numerical/preservation checks before a
    bounded optimization, keeping 003 and 006 checks separate for Bi2Se3.
@@ -365,8 +369,9 @@ For a new combined fit, use this sequence:
    Detector outlines above a plot must show the native support actually used below;
    whole display profiles remain distinct from partial-bin likelihood additions.
 
-The steps describe the supported method, not a completed new Bi2Se3 fit. The
-historical attempt and its unresolved full-prediction status follow below.
+The earlier attempts below retain their historical failure states. The latest
+restored-response continuation is recorded after them; do not confuse a previous
+incomplete prediction with the current implementation or its qualification.
 
 Use `partition_native_region_support` to assign each positive-membership native
 pixel to the first declared observation group. Preserve fractional weights and
@@ -394,8 +399,8 @@ merged 18 original regions into 13 and are not suitable preservation groups.
 Freeze separate 003/006 checks before any continuation. Audit controls must not
 select candidates; their previously inspected-image status remains explicit.
 
-No new fit completed. Starting from the saved family-fit parameters, the current
-resolved specular rule exceeded its 4194304-node limit. The supported nominal
+That initial attempt produced no new fit. Starting from the saved family-fit
+parameters, the resolved specular rule exceeded its 4194304-node limit. The supported nominal
 importance rule failed inverse-CDF qualification. Its width-only termination was
 inconsistent with the caller's unchanged 2e-15 CDF threshold; importance inversion
 now requires that threshold explicitly. A retry still could not resolve a
@@ -464,3 +469,77 @@ unchanged initial state, numerical proofs, bounded attempts, input/source hashes
 and caller bytes. Any continuation must bind a new finite compute budget and
 complete the frozen baseline, preservation and numerical checks before fitting
 or adopting a candidate. Partial source contributions are never complete fits.
+
+
+### October 9 restored fast-response continuation
+
+The restored explicit `fixed_importance.v1` rule uses strength-independent nodes
+and sparse native-region probabilities. It shares the repaired periodic inverse
+CDF, conditional geometry, event-mass and spatial-probability owners. The adaptive
+pixel-error estimator remains the default; its qualifications are not transferred
+to this nominal option. Geometry/source/optics/proposal changes invalidate the
+response, while candidate strengths, mosaic, attenuation and stitching are
+contracted again. Region compilation uses CPU; automatic CPU/CUDA raster execution
+remains separate. Forced CUDA region compilation rejects explicitly.
+
+For the frozen newer 5-degree Bi2Se3 combined projection above, a complete nominal
+4096-by-32 response compiled in 385.99 seconds. An unchanged contraction took
+7.24 seconds and a changed atomic coordinate took 7.18 seconds without recompilation.
+The retained response is about 459 MB, including grid/node/CSR arrays; this is not
+a process-memory bound. The preceding adaptive attempt had no complete prediction
+after 3806.47 seconds, so this comparison establishes restored usable latency,
+not a speed ratio between equivalent estimators.
+
+Eight actual same-node events agreed between sparse region contraction and the
+canonical native raster to maximum absolute mass error 2.04e-15. Eighteen
+reused-versus-fresh first-batch checks across the nine active coordinates, for
+regular and local-m0 support, had maximum relative L1 error 1.36e-16. These are
+response implementation checks, not whole-image convergence proofs. Explicit
+seed/proposal/spatial changes invalidate reuse, forced CUDA and insufficient
+retained-memory budgets reject, and inactive numerical-refinement controls reject.
+Ruff, the wheel build and native refinement CLI import checks passed; no retained
+assessment harness was added.
+
+The bounded simultaneous fit keeps N=13, all 85 signed rods, all four original
+source rows, 1592 likelihood rows and 2274 required prediction rows. It profiles
+one global scale and 41 shared nonincreasing radial background knots against the
+full raw-count covariance, without historical 10-times 00L weighting. The starting
+state passed all 28 declared regional nominal-versus-finer screens using
+8192-by-64 rules: 18 original Bragg regions, seven full diagnostic profiles,
+003, 006 and additional profile support. These screens use the fixed nominal
+scale and the declared 5% signal plus one-count-per-native-pixel allowance; they
+are nominal checks, not source convergence or physical qualification.
+
+The supervised run completed 161 fresh candidate predictions and 163 scoring
+callbacks before its 1800-second optimization-stage deadline interrupted a
+finite-difference Jacobian. Total run time was 3748.09 seconds, including the
+1487.55-second finer-response and 396.03-second nominal-response compilations.
+Maximum sampled RSS was 3.11 GiB; it is not a continuously measured process peak.
+The last full trial lowered the combined objective from 243064.3682 to
+241525.5335 (0.6331%). All trial preservation checks passed, including separate
+003/006 checks. The solver did not return a converged endpoint. No final candidate
+numerical or audit check ran, and no candidate was selected or physically adopted.
+The last full trial, not its slightly lower finite-difference probe, is shown in
+the comparison figure. This remains a bounded incomplete optimization, even though
+the complete fast prediction and repeated candidate evaluation are restored.
+
+The 003 background still relies on inner radial hats without training-control
+support; 006 still lacks matching-radius held-out controls. The source rule is
+nominal, the same-image audit was previously inspected, and the physical parameters
+are not identified. Signed counts and negative-run diagnostics remain unmodified;
+figure bars are conditional imaging-plate count proxies, not calibrated uncertainty.
+The detector overlays show exactly the 482 fitted-profile rows below them. The
+979 native Bragg cells also remain in the joint objective, but are not displayed
+as those profile rows. Read the regional checks separately.
+
+All evidence is external in the October 9 visualization directory named above:
+`bi2se3_restored_fixed_hybrid.ra_diag.npz`, `restored_response_checks.ra_diag.npz`,
+`bi2se3_restored_combined_fit.ra_diag.npz`, and
+`bi2se3_restored_signed_report.ra_diag.npz`. The last pack binds the closed run,
+contains the hash-verified execution source and exact report caller, and accompanies
+`Bi2Se3_restored_combined_profiles.png`. Runtime sources differ from the final
+commit only by later type/docstring changes and the separately checked admission
+of fixed-rule numerical controls. Historical failed attempts are preserved.
+A future optimization must budget complete objective/Jacobian work rather than
+only the measured raw contraction; resume from a declared saved trial with fresh
+endpoint qualification, not from a silently promoted finite-difference probe.

@@ -6,10 +6,10 @@
 
 ## Native preparation and execution (v18)
 
-The sole regular conditional engine is positive strength-weighted Gaussian axial
+The default regular conditional estimator is positive strength-weighted Gaussian axial
 quadrature with native-pixel-error angular refinement. See
 [NATIVE_REFINEMENT.md](NATIVE_REFINEMENT.md) and [ENGINE_MIGRATION.md](ENGINE_MIGRATION.md).
-Every distinct candidate rebuilds physical panels, canonical signed strengths,
+For that adaptive estimator, every distinct candidate rebuilds physical panels, canonical signed strengths,
 W-dependent nodes/masses and actual-mosaic angular acceptance. Exact completed
 predictions may be reused within their immutable candidate/observable owner.
 `FiberScatteringCache` retains bounded pre-projection state keyed by actual nodes
@@ -17,6 +17,26 @@ and upstream optics. Source weights, origins, visibility and footprints apply
 afresh; no survivor mask determines support. Frozen domains require candidate
 coverage checks and do not freeze strength-dependent rules. The required local-m0
 endpoint chart remains explicit.
+
+The explicitly selected `regular_rule="fixed_importance.v1"` restores a nominal
+strength-independent du dphi estimator for combined native Bragg/profile fitting.
+`regular_axial_power`, `regular_angular_power` and `regular_seed` declare its Sobol
+axial net and source/group-specific angular strata. Its versioned axial proposal
+has equal peaks at b3 spacing, .02*b3 half-width and .2 uniform mass. Full physical
+support and original attempted divisors remain; repaired CDF inversion keeps its
+2e-15 threshold. It does not use or claim the adaptive pixel-error criterion.
+
+`NativeFixedResponse` retains grids, geometry factors and sparse weighted region
+probabilities only under an explicit projection/source/optics/geometry/proposal/rule
+identity. Every evaluation recomputes signed strengths, spherical mosaic, thickness
+attenuation and local stitch, and applies original source probability once. A changed
+identity requires compilation. The default 1 GiB cap covers retained numeric grid/node/CSR
+arrays, excluding temporary projection/transfer storage and Python metadata; callers
+must separately bound process memory. The evaluator retains at most two such
+responses and evicts before a third compilation. Region compilation is CPU-only;
+`auto` or `cpu` accepts it, while forced `cuda` raises. Native raster terminals retain
+their existing automatic selector. Nominal and finer observable/contrast checks
+remain necessary before scientific selection; cache parity is not fit qualification.
 
 `NativeRefinementModel` supplies names, units, a physical binding and exact inactivity rules.
 Built-in Bi/Pb symmetry rules live in those models. Search, observations, instrument binding,
@@ -1114,8 +1134,8 @@ the overlap measure independently of their originating stack or caller.
 
 `FiberIntegrationRule.regular_q_bounds_Ainv` and `local_m0_q_bounds_Ainv` may
 freeze conservative domains enclosing actual pooled source/region support.
-Insufficient coverage raises. Regular integration has no ordinary-engine selector,
-manual axial mesh or fallback. `strength_gauss_order` defaults to four; discrete
+Insufficient coverage raises. The adaptive estimator has no manual axial mesh or
+fallback; explicit fixed importance is separately declared above. `strength_gauss_order` defaults to four; discrete
 moment checks do not establish continuous axial accuracy. `pixel_error_rtol` and
 `pixel_error_atol` control tiled native L1 parent/child indicators, allocating
 absolute tolerance over all source/group/response-panel slots. Work, depth and

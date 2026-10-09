@@ -678,7 +678,7 @@ fitted on training alone. A better admissible profile point for any N invalidate
 N's resolved minimum and requires an all-active joint refit. Failed numerical checks or
 unresolved alternatives leave `selected` null, even if an optimizer reports convergence.
 
-The sole regular engine prepares positive strength-weighted Gaussian axial rules.
+The default regular estimator prepares positive strength-weighted Gaussian axial rules.
 Its scalar measure is W(u) du, W=S+(u)+S-(u), from the canonical physical rod,
 population and incoherent-mixture table. Cheap physical GL16 seed masses resolve
 repeat/endpoint fringes using actual finite phase-depth extent, including unwrapped
@@ -722,7 +722,8 @@ The required local-m0 endpoint chart keeps `local_m0_axial_power=12`,
 `local_m0_peak_half_width_L=0.02`, `local_m0_angular_resolution_fraction=0.5` and
 explicit `local_m0_axial_peak_coordinate`. Its external-Q endpoint transformation
 and empirical composite remain; it is not a competing regular engine. Ordinary
-selectors, manual meshes and sparse detector responses have retired. Migrate inputs
+historical selectors and manual meshes have retired. The explicit fixed-importance
+option below restores bounded sparse responses under a new identity. Migrate inputs
 explicitly as documented in [ENGINE_MIGRATION.md](ENGINE_MIGRATION.md).
 
 `stitch_grid_size` refines the empirical Bi handoff calculation. Baseline, numerical
@@ -741,7 +742,8 @@ The exact candidate cache retains at most 64 completed small prediction vectors,
 keyed by float64 parameters, integer N and mixed/component observable within one
 immutable evaluator/projection owner. Complete G/L output independently prepares
 both pure laws, even at eta endpoints. Source probabilities apply once without
-survivor renormalization. Changed strength/mosaic requires fresh preparation.
+survivor renormalization. Adaptive rules require fresh preparation when strength or
+mosaic changes; the fixed rule below contracts those candidate factors afresh.
 
 `FiberScatteringCache` separately retains pre-projection scattering, bounded by
 256 MiB and 4096 entries. Detector corrections, sample normal translation and
@@ -872,7 +874,7 @@ finite differences of another.
 
 ## Reference proposals
 
-Physical regular panels are prepared internally by the sole strength-Gauss engine.
+Adaptive regular panels are prepared internally by the strength-Gauss estimator.
 Manual axial-mesh preparation and panel-prediction APIs have retired. Historical
 diagnostics are evidence only. Current qualification still needs independently
 declared source/angular/axial comparisons.
@@ -983,8 +985,36 @@ gradient and accepted-iteration counts remain separate from distinct evaluations
 
 ## Candidate preparation and cache limits
 
-No retained mosaic-density or strength-free detector-response cache remains.
-Each pure or mixed law prepares its own angular acceptance with candidate and
-observable identity. Exact completed prediction and upstream scattering reuse do
+The adaptive estimator retains no strength-free detector response. The explicit
+fixed-importance option described below restores bounded nominal response reuse.
+For adaptive rules, each pure or mixed law prepares its own angular acceptance
+with candidate and observable identity. Exact completed prediction and upstream scattering reuse do
 not imply convergence. Work accounting includes preparation, rejected panels,
 source channels, failed calls and caller-owned image storage.
+
+
+## Explicit fast combined-region fitting
+
+For a frozen Bragg-cell plus unused-profile observation, explicitly set
+`regular_rule="fixed_importance.v1"`, `regular_axial_power=12`,
+`regular_angular_power=5`, and `regular_seed=0`. A stitched Bi fit also declares
+`local_m0_angular_rule="cdf_stratified_importance.v1"` with its separately recorded
+proposal, seed and existing minimum 4096 by 32 rule. This is a nominal estimator,
+not the adaptive pixel-error estimator. Keep their numerical qualifications distinct.
+
+Use `NativeJointEvaluator` on the complete combined projection and full covariance.
+The first prediction compiles sparse native region probabilities on CPU. Later
+candidates reuse them only when geometry, optics, source, proposal, nodes and
+observation memberships match; structure, mosaic, attenuation and the specular
+stitch update at every candidate. `auto` selects this available CPU region compiler;
+forced `cuda` is unsupported here and raises. The pixel-raster path still supports
+automatic CPU/CUDA execution. No per-peak scaling or additional background is implied.
+
+Complete one bounded starting prediction, compare cached and direct same-node
+contractions, then measure a changed-parameter update before budgeting optimization.
+Allow for all finite-difference probes and reserve final numerical/preservation
+checks. Refine axial and angular rules on the complete frozen support; never freeze
+strength-dependent Gaussian nodes and call them this fixed rule. All signed counts,
+background support limitations and nominal/selected distinctions remain in force.
+The retained response cap excludes transient allocations, so callers separately
+supervise RSS and elapsed time.

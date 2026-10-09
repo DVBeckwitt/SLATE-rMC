@@ -535,3 +535,12 @@ through the same prepared event kernels. Native parent/child indicators and disc
 moments do not qualify continuous regions, axial convergence or a full physical
 image. Earlier continuous matched-region and structure-response contracts above
 remain separate declared observables.
+
+
+The explicit nominal `fixed_importance.v1` regular estimator instead carries
+ordinary positive du dphi probability-importance weights. Its nodes do not depend
+on sampled structure strength or the fitted mosaic. The same transfer compiler
+applies dL/du once; current signed strengths, cone density, optical/attenuation and
+original source masses contract before the same weighted native Gaussian region
+measure. Cached region probabilities alter work reuse, not units or normalization.
+Its separate quadrature identity and accuracy screens must remain explicit.

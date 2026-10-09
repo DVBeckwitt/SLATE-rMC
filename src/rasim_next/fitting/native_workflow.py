@@ -16,6 +16,9 @@ def native_physics_with(original, plan, overrides):
     if set(overrides) - {"name", "integration", "spatial_quadrature_order", "source"}:
         raise ValueError("unknown numerical refinement fields")
     refinable = {
+        "regular_axial_power",
+        "regular_angular_power",
+        "regular_seed",
         "strength_gauss_order",
         "strength_scalar_order",
         "strength_scalar_phase_step_rad",
@@ -58,6 +61,24 @@ def native_physics_with(original, plan, overrides):
             "spatial_quadrature_order", original.spatial_quadrature_order
         ),
     )
+    requested = set(overrides.get("integration", {}))
+    fixed_controls = {"regular_axial_power", "regular_angular_power", "regular_seed"}
+    adaptive_controls = {
+        "strength_gauss_order",
+        "strength_scalar_order",
+        "strength_scalar_phase_step_rad",
+        "angular_initial_power",
+        "pixel_error_rtol",
+        "pixel_error_atol",
+        "pixel_error_initial_width_rad",
+    }
+    inactive = (
+        adaptive_controls
+        if result.integration_rule.regular_rule == "fixed_importance.v1"
+        else fixed_controls
+    )
+    if requested & inactive:
+        raise ValueError("numerical overrides cannot refine controls of the inactive regular rule")
     local_m0_active = result.specular_stitch_stack is not None and any(
         r.h == r.k == 0 and r.population > 0 for r in result.rods
     )

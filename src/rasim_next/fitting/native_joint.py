@@ -38,8 +38,10 @@ class NativeRefinementModel(Protocol):
 class NativeJointEvaluator:
     """Bounded explicit caches; every trial rebinds atomic amplitudes and optics.
 
-    Current strength, thickness, source, optics, mosaic and rigid geometry
-    always prepare a new response. Exact completed candidate predictions reuse
+    Adaptive rules always prepare candidate-dependent responses. The explicit
+    fixed importance rule reuses geometry and region probabilities while
+    contracting current signed strength, mosaic, attenuation and source masses.
+    Exact completed candidate predictions reuse
     only within this immutable evaluator and observation projection.
     ``spatial_execution`` defaults to per-batch automatic CPU/CUDA deposition;
     all physical preparation and adaptive acceptance retain their shared owners.
@@ -59,6 +61,7 @@ class NativeJointEvaluator:
     contraction_count: int = field(default=0, init=False)
     compile_seconds: float = field(default=0, init=False)
     _predictions: OrderedDict = field(default_factory=OrderedDict, init=False, repr=False)
+    _responses: OrderedDict = field(default_factory=OrderedDict, init=False, repr=False)
     scattering_cache: FiberScatteringCache = field(default_factory=FiberScatteringCache, repr=False)
 
     def __post_init__(self):
@@ -156,7 +159,7 @@ class NativeJointEvaluator:
         return prediction
 
     def _predict_part(self, physics, arguments, mosaic, stack, *, resolve_mosaic_components=False):
-        """Reprepare every distinct candidate; only exact completed predictions cache."""
+        """Reprepare adaptive candidates; reuse only explicitly strength-free responses."""
         if resolve_mosaic_components:
             if mosaic.gaussian_sigma_rad <= 0 or mosaic.lorentzian_half_width_rad <= 0:
                 raise ValueError("component predictions require both positive mosaic widths")
@@ -177,15 +180,30 @@ class NativeJointEvaluator:
                 spatial_execution=self.spatial_execution,
                 spatial_executor=self.spatial_executor,
             )
-            predictions.append(
-                detector.integrate_native_regions(
-                    self.observations.projection, scattering_cache=self.scattering_cache
+            projection = self.observations.projection
+            if detector.integration_rule.regular_rule == "fixed_importance.v1":
+                key = detector.native_response_revision(projection)
+                if key not in self._responses:
+                    while len(self._responses) >= 2:
+                        self._responses.popitem(last=False)
+                    response = detector.compile_native_response(projection)
+                    self._responses[key] = response
+                    object.__setattr__(self, "compile_count", self.compile_count + 1)
+                    object.__setattr__(
+                        self, "compile_seconds", self.compile_seconds + perf_counter() - start
+                    )
+                self._responses.move_to_end(key)
+                predictions.append(self._responses[key].evaluate(detector, projection))
+            else:
+                predictions.append(
+                    detector.integrate_native_regions(
+                        projection, scattering_cache=self.scattering_cache
+                    )
                 )
-            )
-            object.__setattr__(
-                self, "compile_seconds", self.compile_seconds + perf_counter() - start
-            )
-            object.__setattr__(self, "compile_count", self.compile_count + 1)
+                object.__setattr__(
+                    self, "compile_seconds", self.compile_seconds + perf_counter() - start
+                )
+                object.__setattr__(self, "compile_count", self.compile_count + 1)
             object.__setattr__(self, "contraction_count", self.contraction_count + 1)
         return np.stack(predictions) if resolve_mosaic_components else predictions[0]
 
@@ -193,6 +211,7 @@ class NativeJointEvaluator:
         self.scattering_cache.entries.clear()
         self.scattering_cache.retained_bytes = 0
         self._predictions.clear()
+        self._responses.clear()
 
     def inactive_parameters(self, values, coherent_repeats):
         """Exact physical inactivity at mixture boundaries; coordinates stay free.
