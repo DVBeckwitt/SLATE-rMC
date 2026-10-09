@@ -119,6 +119,7 @@ def make_native_evaluator(physics, observations, plan, *, model=None):
         MosaicParameters(*plan["proposal_mosaic"]),
         instrument,
         plan["workers"],
+        spatial_execution=plan.get("spatial_execution", "auto"),
     )
     if evaluator.parameter_names != names:
         raise ValueError("plan must declare every physical parameter in the evaluator's order")
@@ -133,7 +134,10 @@ def make_native_evaluator(physics, observations, plan, *, model=None):
     return evaluator
 
 
-def native_prediction_group(physics, observations, plan, values, repeats, *, model=None):
+def native_prediction_group(
+    physics, observations, plan, values, repeats, *, model=None, include_execution=False
+):
     """One process-local evaluator, reused across a bounded group of candidates."""
     evaluator = make_native_evaluator(physics, observations, plan, model=model)
-    return [evaluator.predict(row, repeats) for row in values]
+    predictions = [evaluator.predict(row, repeats) for row in values]
+    return (predictions, evaluator.spatial_executor.summary()) if include_execution else predictions

@@ -80,6 +80,8 @@ def render(
             part.detector(mosaic=mosaic, **arguments),
             specular_stitch_stack=stack,
             proposal_mosaic=evaluator.proposal_mosaic,
+            spatial_execution=evaluator.spatial_execution,
+            spatial_executor=evaluator.spatial_executor,
         )
         for part in bound.integration_parts()
     )
@@ -172,6 +174,10 @@ def render(
     if resume:
         with np.load(io.BytesIO(output.read_bytes()), allow_pickle=False) as saved:
             old = json.loads(saved["manifest_json"].tobytes())
+            manifest["previous_spatial_execution"] = {
+                "summary": old.get("spatial_execution_summary"),
+                "previous": old.get("previous_spatial_execution"),
+            }
             if (
                 old.get("schema") != manifest["schema"]
                 or type(old.get("completed_batches")) is not int
@@ -245,6 +251,8 @@ def render(
     last_checkpoint = perf_counter()
 
     def save():
+        manifest["spatial_execution"] = evaluator.spatial_execution
+        manifest["spatial_execution_summary"] = evaluator.spatial_executor.summary()
         manifest["elapsed_seconds"] = perf_counter() - started
         write_diagnostic(output, arrays=arrays, manifest=manifest, repository_root=root)
 

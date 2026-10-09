@@ -5,6 +5,108 @@ optical transport, spherical mosaic and native-pixel integration used by the
 renderer. A fit predicts the frozen native observations; moving geometry or a
 lattice never moves measured pixels into another fitting region.
 
+## Automatic CPU/CUDA spatial execution
+
+Native fitting and rendering default to `spatial_execution="auto"`, selecting
+CPU or CUDA for each Gaussian deposition batch, for both regular rods and the
+local-lamella composite. Plans may explicitly set `spatial_execution` to `cpu`
+or `cuda`. The same modes are available on `ConditionalStructureDetector`; the
+low-level `DetectorSpatialKernels.integrate_native_pixels` keyword is `execution`.
+
+`NativeSpatialExecutor` is an explicit execution resource, separate from physical
+state. Evaluators share it across candidate detectors; standalone kernel calls
+reuse their own `spatial_executor` automatically. An optional `executor=` shares
+calibration across different low-level kernel objects. There is no global cache,
+disk cache, import-time device initialization or background calibration. A resource
+is confined to its first calling process/thread. Different processes own their
+own calibration; a changed device or quadrature rule conservatively uses CPU.
+
+Auto first excludes small batches (fewer than 64 active events or 262144 clipped
+pixel visits) and near-degenerate conditional widths. These are conservative
+admission floors, not universal crossover claims. It counts actual column-conditioned
+pixel visits in four correlation branches and checks device capability, toolkit
+availability and free memory. Memory admission includes calibration's largest
+1024-by-1024 float64 transfer window, actual parameter/coefficient buffers and 20%
+headroom; it checks free memory again after calibration. CUDA errors after selection
+propagate without a CPU retry.
+
+The first admitted batch calibrates production CPU/CUDA functions on four bounded
+256-event, 256-by-256 cases, plus zero-mass calls measuring launch/transfer/event
+overhead. Timings include transfers, synchronization and readback; setup/compilation
+time is recorded separately. Calibration checks finite CPU/CUDA outputs and maximum
+pixel disagreement at most `1e-11 * CPU_peak`. An unresolved or nonpositive compute
+rate selects CPU; a numerical parity failure raises. The frozen local timing model
+requires predicted CPU time greater than `1.35 * predicted_CUDA_time` to choose CUDA.
+This is a conservative heuristic, not a guarantee under every workload or changing
+system load. No physical fit or numerical convergence follows from calibration.
+
+`spatial_executor.summary()` reports calibration, most recent decision and counts
+by device/reason. Counts mean attempted selections, not completed predictions.
+Low-level decisions also use the ordinary debug logger; diagnostics stay off by
+default. Fit checkpoints retain parent, completed worker-group, refinement and
+reference-correction summaries; rendering retains summaries and resume lineage.
+Failed worker groups do not return a completed execution summary. Cached raw
+predictions retain their previous execution provenance. The desktop native Simulator
+continues to request CPU explicitly under its existing CPU-only numerical reservation;
+its resource-admission policy is separate from the fitting/batch APIs.
+
+Canonical source, geometry, optics, signed strengths, spherical mosaic and angular
+preparation remain on the CPU. CUDA receives those already contracted event masses
+and the unchanged Gaussian means/factors, spatial order, tail radius and native
+window. It returns the full pixel patch used by the existing adaptive pixel-L1
+criterion before fractional observation memberships apply. There is no center
+sampling, rectangle substitution, surviving-mass normalization or altered tolerance.
+
+The CPU and CUDA compilers share scalar Gaussian interval, conditional-CDF,
+correlation-corner and cancellation arithmetic. CUDA uses float64 event atomics,
+so independent positive contributions may sum in a different order. CUDA is loaded
+lazily. Explicit `cuda` raises for unavailable hardware rather than substituting;
+auto records CPU admission when hardware is unavailable. The Numba CUDA runtime needs a compatible
+CUDA toolkit and compute capability at least 6.0. No new package dependency is added.
+The requested execution mode participates in the detector revision. External raw
+prediction stores must bind it and retain execution summaries with completed evidence.
+
+The October 9 RTX 3060 comparison retained the actual Bi2Se3 first local batch:
+16,352 events and a 1579-by-3000 native window, spatial order 16 and radius 8.
+CUDA differed by at most 3.39e-21 A2, or 3.49e-16 of the fixed CPU peak.
+The refactored CPU output was bitwise identical to the prior CPU implementation.
+Warm terminal times, including transfers/readback, were 2.78–2.90 s CUDA versus
+13.03 s CPU before concurrent loading increased CPU time. Cold compilation is
+separate. A 128-patch regular comparison retained identical 1024 accepted event
+nodes and patch bounds; its maximum difference was 2.03e-15 of the CPU peak.
+Those small patches took 1.84 s CUDA versus 1.65 s CPU, so GPU acceleration is
+workload-dependent. These timings do not establish a full prediction or fit speedup.
+
+The subsequent automatic-selector check reused that full saved 16,352-event window
+without changing masses or spatial rules. Default calls chose CUDA and reused the
+same calibration: 9.82 s first call including 5.86 s calibration, then 2.65 s warm,
+versus 13.15 s explicitly warmed CPU. The CPU result remained bitwise identical to
+the saved comparison. Tiny eight-event batches selected CPU without importing CUDA
+and matched explicit CPU bitwise. Admission, override, failure-propagation, clipped
+visit-count and worker-summary checks are implementation evidence. The external
+`auto_spatial_selection.ra_diag.npz` retains the checks and measured outputs; no fit,
+whole prediction or general optimal-routing claim is made.
+
+Targeted comparisons also cover both correlation signs, near-unit correlation,
+off-window centers, native offsets, zero event mass, caller-owned accumulation,
+an independent separable Gaussian integral and unchanged conditional-CDF panels.
+The external `gpu_native_validation.ra_diag.npz` retains numeric results, exact
+callers, execution/source hashes and completed-source flags. Implementation
+equivalence does not establish angular convergence, physical adequacy or a qualified
+fit. In particular, the nominal local-m0 rule retains its existing qualification
+limitations, and a changed floating-point sum can affect a near-threshold adaptive
+decision; assess the declared complete observable when qualifying a run.
+
+The subsequent all-spatial CUDA attempt retained all 85 rods and four original
+source probabilities on the required training, held-out and valid profile supports.
+Four nominal source processes ran from 15:20 to 15:40 UTC and completed no source
+vector. The fine rule remained queued and the optimizer never started. A live sample
+at 15:29 found 28,184 evaluated angular nodes in one early regular axial interval,
+with the unchanged full-pixel relative error tolerance of 5e-5 and the GPU busy.
+This bounds implementation availability, not end-to-end capacity: the large adaptive
+work count remains unresolved. No completed nominal/fine observable or new fit is
+claimed, and incomplete source arrays must be read with their completion flags.
+
 ## Optional positive background profiling
 
 `NativeBackgroundProblem` is an explicit opt-in to `score_native_prediction` and

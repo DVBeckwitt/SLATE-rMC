@@ -15,6 +15,7 @@ from rasim_next.fitting.native_instrument import (
 from rasim_next.fitting.native_observations import NativeFitObservations
 from rasim_next.fitting.native_structure import native_stitch_records
 from rasim_next.pipeline.fiber_detector import FiberScatteringCache
+from rasim_next.pipeline.spatial_execution import NativeSpatialExecutor
 
 
 class NativeRefinementModel(Protocol):
@@ -40,6 +41,8 @@ class NativeJointEvaluator:
     Current strength, thickness, source, optics, mosaic and rigid geometry
     always prepare a new response. Exact completed candidate predictions reuse
     only within this immutable evaluator and observation projection.
+    ``spatial_execution`` defaults to per-batch automatic CPU/CUDA deposition;
+    all physical preparation and adaptive acceptance retain their shared owners.
     """
 
     model: NativeRefinementModel
@@ -47,6 +50,10 @@ class NativeJointEvaluator:
     proposal_mosaic: MosaicParameters
     instrument_model: NativeInstrumentModel | None = None
     worker_count: int = 1
+    spatial_execution: str = "auto"
+    spatial_executor: NativeSpatialExecutor = field(
+        default_factory=NativeSpatialExecutor, repr=False, compare=False
+    )
     compile_count: int = field(default=0, init=False)
     evaluation_count: int = field(default=0, init=False)
     contraction_count: int = field(default=0, init=False)
@@ -55,6 +62,10 @@ class NativeJointEvaluator:
     scattering_cache: FiberScatteringCache = field(default_factory=FiberScatteringCache, repr=False)
 
     def __post_init__(self):
+        if self.spatial_execution not in {"auto", "cpu", "cuda"}:
+            raise ValueError("native spatial execution must be auto, cpu or cuda")
+        if not isinstance(self.spatial_executor, NativeSpatialExecutor):
+            raise TypeError("spatial_executor must be a NativeSpatialExecutor")
         if type(self.worker_count) is not int or self.worker_count != 1:
             raise ValueError(
                 "native preparation uses one worker; use prediction_workers for parallel candidates"
@@ -160,7 +171,11 @@ class NativeJointEvaluator:
             start = perf_counter()
             detector = physics.detector(mosaic=law, **arguments)
             detector = replace(
-                detector, proposal_mosaic=self.proposal_mosaic, specular_stitch_stack=stack
+                detector,
+                proposal_mosaic=self.proposal_mosaic,
+                specular_stitch_stack=stack,
+                spatial_execution=self.spatial_execution,
+                spatial_executor=self.spatial_executor,
             )
             predictions.append(
                 detector.integrate_native_regions(

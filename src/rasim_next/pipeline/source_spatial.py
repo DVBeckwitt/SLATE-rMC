@@ -7,11 +7,13 @@ do not supply structure factors, mosaic probabilities, optics or source weights.
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass, field
 
 import numba
 import numpy as np
+from numba.extending import register_jitable
 from numpy.typing import ArrayLike, NDArray
 from scipy.sparse import csr_matrix
 from scipy.special import ndtr
@@ -22,10 +24,11 @@ from rasim_next.geometry.detector import _intersect_detector_plane
 from rasim_next.geometry.instrument import CompiledInstrument
 from rasim_next.geometry.sample import _intersect_sample_rays
 from rasim_next.measurement.continuous_regions import NativePixelRegionProjection
+from rasim_next.pipeline.spatial_execution import NativeSpatialExecutor
 from rasim_next.sampling.source import ConditionalSourceSamples
 
 
-@numba.njit(nogil=True, inline="always")
+@register_jitable
 def _normal_interval_from_tails(low, high, low_tail, high_tail):
     if low >= 0:
         return low_tail - high_tail
@@ -34,7 +37,7 @@ def _normal_interval_from_tails(low, high, low_tail, high_tail):
     return 1.0 - (high_tail + low_tail)
 
 
-@numba.njit(nogil=True)
+@register_jitable
 def _normal_interval_probability(low: float, high: float) -> float:
     root2 = math.sqrt(2.0)
     return _normal_interval_from_tails(
@@ -42,13 +45,13 @@ def _normal_interval_probability(low: float, high: float) -> float:
     )
 
 
-@numba.njit(nogil=True)
+@register_jitable
 def _rectangle_probability(
     mx, my, sx, beta, conditional_y, xlow, xhigh, ylow, yhigh, nodes, weights, radius
 ):
     """Normal-x integral of the conditional normal-y CDF; no pixel-center blur."""
-    lo = max((xlow - mx) / sx, -radius)
-    hi = min((xhigh - mx) / sx, radius)
+    lo = (xlow - mx) / sx if (xlow - mx) / sx > -radius else -radius
+    hi = (xhigh - mx) / sx if (xhigh - mx) / sx < radius else radius
     if hi <= lo:
         return 0.0
     slope = beta * sx
@@ -56,38 +59,48 @@ def _rectangle_probability(
         return _normal_interval_probability(lo, hi) * _normal_interval_probability(
             (ylow - my) / conditional_y, (yhigh - my) / conditional_y
         )
-    mean_a, mean_b = my + slope * lo, my + slope * hi
-    mean_low, mean_high = min(mean_a, mean_b), max(mean_a, mean_b)
+    mean_a, mean_b = (my + slope * lo, my + slope * hi)
+    mean_low, mean_high = (
+        mean_a if mean_a < mean_b else mean_b,
+        mean_a if mean_a > mean_b else mean_b,
+    )
     if ylow <= mean_low - radius * conditional_y and yhigh >= mean_high + radius * conditional_y:
         return _normal_interval_probability(lo, hi)
-    # Resolve both the marginal Gaussian and a narrow conditional-CDF transition.
-    edges = [lo, hi]
-    for j in range(1, math.ceil((hi - lo) / 0.5)):
-        edges.append(lo + j * 0.5)
-    if slope != 0:
+    # Visit the same sorted panel edges without a device-side dynamic list.
+    # Repeated coincident edges have zero width and contribute no integral.
+    total = 0.0
+    left = lo
+    while left < hi:
+        right = hi
+        for j in range(1, math.ceil((hi - lo) / 0.5)):
+            edge = lo + j * 0.5
+            if left < edge < right:
+                right = edge
         transition_width = conditional_y / abs(slope)
         for yedge in (ylow, yhigh):
             center = (yedge - my) / slope
             for offset in (-radius, -2.0, 0.0, 2.0, radius):
                 edge = center + offset * transition_width
-                if lo < edge < hi:
-                    edges.append(edge)
-    edges.sort()
-    total = 0.0
-    for j in range(len(edges) - 1):
-        mean_a = my + slope * edges[j]
-        mean_b = my + slope * edges[j + 1]
-        mean_low, mean_high = min(mean_a, mean_b), max(mean_a, mean_b)
+                if left < edge < right:
+                    right = edge
+        panel_left, panel_right = (left, right)
+        left = right
+        mean_a = my + slope * panel_left
+        mean_b = my + slope * panel_right
+        mean_low, mean_high = (
+            mean_a if mean_a < mean_b else mean_b,
+            mean_a if mean_a > mean_b else mean_b,
+        )
         if (
             ylow <= mean_low - radius * conditional_y
             and yhigh >= mean_high + radius * conditional_y
         ):
-            total += _normal_interval_probability(edges[j], edges[j + 1])
+            total += _normal_interval_probability(panel_left, panel_right)
             continue
         if yhigh <= mean_low - radius * conditional_y or ylow >= mean_high + radius * conditional_y:
             continue
-        midpoint = 0.5 * (edges[j] + edges[j + 1])
-        half = 0.5 * (edges[j + 1] - edges[j])
+        midpoint = 0.5 * (panel_left + panel_right)
+        half = 0.5 * (panel_right - panel_left)
         for k in range(len(nodes)):
             x = midpoint + half * nodes[k]
             ym = my + slope * x
@@ -134,12 +147,12 @@ def _correlation_angle_coefficients(slope, conditional_y, nodes, weights):
     return coefficients
 
 
-@numba.njit(nogil=True, inline="always")
+@register_jitable
 def _correlation_corner(a, sine, x, y):
     return math.exp(-a * (x - sine * y) ** 2 - 0.5 * y * y)
 
 
-@numba.njit(nogil=True)
+@register_jitable
 def _complementary_correlation_corner(x, y, a, nodes, weights):
     """Short residual from positive unit correlation, with Genz's Taylor subtraction.
 
@@ -173,6 +186,28 @@ def _complementary_correlation_corner(x, y, a, nodes, weights):
         remainder = math.expm1(logarithm) - c * t2 * (1.0 + d * t2)
         value += 0.5 * a * weights[i] * math.exp(-0.5 * (square / t2 + product)) * remainder
     return value / (2.0 * math.pi)
+
+
+@register_jitable
+def _signed_unit_rectangle_probability(lo, hi, yl, yh, sign):
+    """Gaussian rectangle at the signed unit-correlation limit."""
+    lower, upper = (yl, yh) if sign > 0.0 else (-yh, -yl)
+    left, right = (lo if lo > lower else lower), (hi if hi < upper else upper)
+    return _normal_interval_probability(left, right) if right > left else 0.0
+
+
+@register_jitable
+def _assemble_correlation_rectangle(base, a, b, c, d, sign, complementary):
+    """Shared corner cancellation check; caches and execution do not own arithmetic."""
+    correction = a - b - c + d
+    scale = base + abs(a) + abs(b) + abs(c) + abs(d)
+    if complementary:
+        value = base - sign * correction
+        return value, math.isfinite(value) and value >= 0.0 and value >= 1e-12 * scale
+    value = base + correction
+    if base + abs(correction) > scale:
+        scale = base + abs(correction)
+    return value, not (value < 0.0 or value < 1e-12 * scale)
 
 
 @numba.njit(nogil=True)
@@ -252,12 +287,9 @@ def _correlated_rectangle_probability(
                 radius,
             )
         sign = 1.0 if rho > 0.0 else -1.0
-        lower, upper = (yl, yh) if sign > 0.0 else (-yh, -yl)
-        left, right = max(lo, lower), min(hi, upper)
-        base = _normal_interval_probability(left, right) if right > left else 0.0
+        base = _signed_unit_rectangle_probability(lo, hi, yl, yh, sign)
         x, y = (hi, lo, hi, lo), (yh, yh, yl, yl)
         values = np.empty(4)
-        scale = base
         for j in range(4):
             corner = corner_index[j]
             if corner_stamp[corner] != stamp:
@@ -266,9 +298,10 @@ def _correlated_rectangle_probability(
                 )
                 corner_stamp[corner] = stamp
             values[j] = corner_integral[corner]
-            scale += abs(values[j])
-        value = base - sign * (values[0] - values[1] - values[2] + values[3])
-        if np.isfinite(value) and value >= 0.0 and value >= 1e-12 * scale:
+        value, accepted = _assemble_correlation_rectangle(
+            base, values[0], values[1], values[2], values[3], sign, True
+        )
+        if accepted:
             return value
         return _rectangle_probability(
             mx,
@@ -313,8 +346,25 @@ def _correlated_rectangle_probability(
                 corner_integral[corner] = value
                 corner_stamp[corner] = stamp
             values[j] = corner_integral[corner]
-            cancellation_scale += abs(values[j])
-        correction = values[0] - values[1] - values[2] + values[3]
+        value, accepted = _assemble_correlation_rectangle(
+            base, values[0], values[1], values[2], values[3], 1.0, False
+        )
+        if accepted:
+            return value
+        return _rectangle_probability(
+            mx,
+            my,
+            sx,
+            beta,
+            conditional_y,
+            xlow,
+            xhigh,
+            ylow,
+            yhigh,
+            nodes,
+            weights,
+            radius,
+        )
     elif corner_exp.shape[0] == 0:
         correction = 0.0
         for i in range(angle_coefficients.shape[1]):
@@ -623,12 +673,41 @@ class NativeSpatialRegionProjection:
         )
 
 
-@numba.njit(nogil=True, inline="always")
+@register_jitable
 def _pixel_kernel_parameters(f):
     sx = math.sqrt(f[0, 0] ** 2 + f[0, 1] ** 2)
     beta = (f[0, 0] * f[1, 0] + f[0, 1] * f[1, 1]) / (sx * sx)
     conditional_y = abs(f[0, 0] * f[1, 1] - f[0, 1] * f[1, 0]) / sx
     return sx, beta, conditional_y
+
+
+@numba.njit(nogil=True)
+def _pixel_work(mean, factor, mass, shape, radius, row_offset, column_offset):
+    """Count canonical column-conditioned visits, split by arithmetic branch."""
+    work = np.zeros(4)
+    active = 0
+    degenerate = False
+    for i in range(len(mean)):
+        if mass[i] == 0:
+            continue
+        mx, my = mean[i]
+        sx, beta, cy = _pixel_kernel_parameters(factor[i])
+        rho = abs(beta * sx) / math.hypot(beta * sx, cy)
+        kind = 0 if beta == 0 else (1 if rho < math.sqrt(0.75) else (2 if rho < 0.925 else 3))
+        low = max(column_offset, math.ceil(mx - radius * sx - 0.5))
+        high = min(column_offset + shape[1] - 1, math.floor(mx + radius * sx + 0.5))
+        visited = 0
+        yr = 0.5 * abs(beta) + radius * cy
+        for column in range(low, high + 1):
+            ym = my + beta * (column - mx)
+            bottom = max(row_offset, math.ceil(ym - yr - 0.5))
+            top = min(row_offset + shape[0] - 1, math.floor(ym + yr + 0.5))
+            visited += max(0, top - bottom + 1)
+        work[kind] += visited
+        active += visited > 0
+        if visited and cy / math.hypot(beta * sx, cy) <= 1e-12:
+            degenerate = True
+    return work, active, degenerate
 
 
 @numba.njit(nogil=True)
@@ -764,10 +843,15 @@ class DetectorSpatialKernels:
     mean_px: NDArray[np.float64]
     factor_px: NDArray[np.float64]
     backward_probability_bound: NDArray[np.float64]
+    spatial_executor: NativeSpatialExecutor = field(
+        default_factory=NativeSpatialExecutor, repr=False, compare=False
+    )
     _inverse_factor: NDArray[np.float64] = field(init=False, repr=False)
     _normalization: NDArray[np.float64] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if not isinstance(self.spatial_executor, NativeSpatialExecutor):
+            raise TypeError("spatial_executor must be a NativeSpatialExecutor")
         mean = np.array(self.mean_px, dtype=np.float64, copy=True)
         factor = np.array(self.factor_px, dtype=np.float64, copy=True)
         loss = np.array(self.backward_probability_bound, dtype=np.float64, copy=True)
@@ -871,6 +955,8 @@ class DetectorSpatialKernels:
         row_offset: int = 0,
         column_offset: int = 0,
         out: NDArray[np.float64] | None = None,
+        execution: str = "auto",
+        executor: NativeSpatialExecutor | None = None,
     ) -> NDArray[np.float64]:
         """Integrate the same continuous kernels into [row,column] pixel masses.
 
@@ -886,6 +972,12 @@ class DetectorSpatialKernels:
         It must not alias kernel inputs or masses. A numerical failure can leave it
         partially updated; discard that buffer after an exception. Default calls
         allocate a new array. Neither windowing nor accumulation changes quadrature.
+        Auto selects each batch using a bounded local timing calibration. Native
+        evaluators supply a reusable executor; standalone callers may pass one to
+        reuse calibration and inspect decisions. Otherwise the kernel's explicit
+        spatial_executor owns it. Decisions are also available through the debug logger.
+        Explicit CPU/CUDA bypass calibration; CUDA errors never retry on CPU.
+        Float64 event atomics may change summation rounding.
         """
         shape = _pixel_window(detector_shape_rc, row_offset, column_offset)
         mass = np.asarray(integrated_mass, dtype=np.float64)
@@ -906,20 +998,58 @@ class DetectorSpatialKernels:
             raise ValueError(
                 "out must be an independent writable finite nonnegative float64 window"
             )
-        result = _deposit_gaussian_pixels(
-            self.mean_px,
-            self.factor_px,
-            mass,
-            shape,
-            nodes,
-            weights,
-            angle_nodes,
-            angle_weights,
-            float(gaussian_tail_radius),
-            row_offset,
-            column_offset,
-            out,
-        )
+        if execution not in {"auto", "cpu", "cuda"}:
+            raise ValueError("spatial execution must be auto, cpu or cuda")
+        if execution == "auto" or executor is not None:
+            if executor is None:
+                executor = self.spatial_executor
+            if not isinstance(executor, NativeSpatialExecutor):
+                raise TypeError("executor must be a NativeSpatialExecutor")
+            execution = executor.select(
+                execution,
+                self.mean_px,
+                self.factor_px,
+                mass,
+                shape,
+                nodes,
+                weights,
+                float(gaussian_tail_radius),
+                row_offset,
+                column_offset,
+            )
+            logging.getLogger(__name__).debug(
+                "Native spatial execution: %s", executor.last_decision
+            )
+        if execution == "cuda":
+            from rasim_next.pipeline._source_spatial_cuda import deposit_gaussian_pixels_cuda
+
+            result = deposit_gaussian_pixels_cuda(
+                self.mean_px,
+                self.factor_px,
+                mass,
+                shape,
+                nodes,
+                weights,
+                float(gaussian_tail_radius),
+                row_offset,
+                column_offset,
+                out,
+            )
+        else:
+            result = _deposit_gaussian_pixels(
+                self.mean_px,
+                self.factor_px,
+                mass,
+                shape,
+                nodes,
+                weights,
+                angle_nodes,
+                angle_weights,
+                float(gaussian_tail_radius),
+                row_offset,
+                column_offset,
+                out,
+            )
         if np.any(~np.isfinite(result)):
             raise FloatingPointError("integrated spatial mass is nonfinite")
         return result

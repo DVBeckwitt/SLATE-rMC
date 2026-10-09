@@ -38,6 +38,15 @@ The preserved research/full-image qualification gates are in
 [VALIDATION.md](VALIDATION.md#historical-full-image-comparison-gates). Historical T44
 implementation records are archived as described in [REPOSITORY_HISTORY.md](REPOSITORY_HISTORY.md).
 
+Native spatial execution defaults to `auto`, with explicit `cpu` and `cuda` overrides.
+`NativeSpatialExecutor` owns process/thread-local calibration and selection accounting;
+it is an explicit performance resource, not physical model state. Auto uses unchanged
+float64 Gaussian terminals and preserves support, weights, requested rules and adaptive
+acceptance. CPU admission is recorded before execution; a selected CUDA failure never
+retries on CPU. Calibration changes no scientific tolerances or qualification. See
+[native execution](NATIVE_REFINEMENT.md#automatic-cpucuda-spatial-execution) for admission,
+setup costs, checkpoint scope and the separate desktop CPU reservation.
+
 Near-unit-correlation Gaussian corners use complementary residuals from the signed
 unit-correlation limit, following Genz (2004). Cache representation is fixed per
 Gaussian; rectangles outside the standardized-endpoint guard use direct conditional

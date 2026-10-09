@@ -142,6 +142,8 @@ def canonical_native(draft):
             part.detector(mosaic=mosaic, **arguments),
             specular_stitch_stack=part.specular_stitch_stack,
             proposal_mosaic=proposal,
+            # Desktop admission currently reserves CPU numerical storage only.
+            spatial_execution="cpu",
         )
         for part in parts
     )

@@ -371,6 +371,8 @@ def main():
         fit_scope="fixed_parameter_control" if fixed_parameters else "all_admitted_coordinates",
         fixed_parameters=fixed_parameters,
         implementation=_implementation_record(),
+        spatial_execution=plan.get("spatial_execution", "auto"),
+        worker_spatial_execution=[],
         model="finite detector-native Bi/Pb with composition-derived optics",
         numerical_checks=[],
         fits=[],
@@ -410,6 +412,10 @@ def main():
                     "optimizer_candidate",
                     "selected",
                     "numerical_status",
+                    "spatial_execution",
+                    "parent_spatial_execution",
+                    "worker_spatial_execution",
+                    "previous_execution",
                 )
             }
         manifest["resumed_from_completed_predictions"] = len(predictions.raw)
@@ -422,6 +428,7 @@ def main():
             compile_metrics_scope="parent evaluator only; worker-group builds excluded",
             compile_count=evaluator.compile_count,
             compile_seconds=evaluator.compile_seconds,
+            parent_spatial_execution=evaluator.spatial_executor.summary(),
         )
         arrays["evaluation_history"] = np.asarray(history)
         arrays.update(predictions.arrays())
@@ -480,12 +487,20 @@ def main():
         ]
         futures = {
             executor.submit(
-                native_prediction_group, physics, observations, plan, values[indices], n
+                native_prediction_group,
+                physics,
+                observations,
+                plan,
+                values[indices],
+                n,
+                include_execution=True,
             ): indices
             for indices in chunks
         }
         for future in as_completed(futures):
-            for index, row in zip(futures[future], future.result(), strict=True):
+            returned, execution_summary = future.result()
+            manifest["worker_spatial_execution"].append(execution_summary)
+            for index, row in zip(futures[future], returned, strict=True):
                 yield index, row
 
     def predict_many(values, n):
@@ -651,6 +666,7 @@ def main():
                         empirical_agreement=comparison["empirical_agreement"],
                         compile_count=refined_evaluator.compile_count,
                         compile_seconds=refined_evaluator.compile_seconds,
+                        spatial_execution=refined_evaluator.spatial_executor.summary(),
                         source_partitions_candidate_index=len(candidates) - 1,
                         source_partitions=[
                             dict(
@@ -811,6 +827,7 @@ def main():
                             low_compile_count=low_evaluator.compile_count,
                             low_compile_seconds=low_evaluator.compile_seconds,
                             low_evaluation_count=low_evaluator.evaluation_count,
+                            spatial_execution=low_evaluator.spatial_executor.summary(),
                             acceptance="exact_checked_warm_start_only",
                         )
                     )
@@ -999,7 +1016,12 @@ def main():
                     signal = np.zeros(control.projection.observation_count)
                     for part in bound.integration_parts():
                         detector = part.detector(mosaic=mosaic, **arguments)
-                        detector = replace(detector, specular_stitch_stack=stack)
+                        detector = replace(
+                            detector,
+                            specular_stitch_stack=stack,
+                            spatial_execution=evaluator.spatial_execution,
+                            spatial_executor=evaluator.spatial_executor,
+                        )
                         signal += scale * detector.integrate_native_regions(control.projection)
                     diagnostic = control.signal_diagnostic(signal)
                     arrays[f"control_{label}_{i}_signal_count"] = signal

@@ -45,6 +45,7 @@ from rasim_next.pipeline.pixel_error import iter_pixel_error_batches
 from rasim_next.pipeline.source_spatial import (
     validate_conditional_spatial_support,
 )
+from rasim_next.pipeline.spatial_execution import NativeSpatialExecutor
 from rasim_next.pipeline.strength_gauss import (
     finite_stack_resolution,
     identically_zero_strength,
@@ -279,9 +280,17 @@ class ConditionalStructureDetector:
     incidence_axis_angle_rad: float | None = None
     scan_calibration_binding_revision: str | None = None
     proposal_mosaic: MosaicParameters | None = None
+    spatial_execution: str = "auto"
+    spatial_executor: NativeSpatialExecutor = field(
+        default_factory=NativeSpatialExecutor, repr=False, compare=False
+    )
     fixed_physics_revision: str = field(init=False)
 
     def __post_init__(self) -> None:
+        if self.spatial_execution not in {"auto", "cpu", "cuda"}:
+            raise ValueError("native spatial execution must be auto, cpu or cuda")
+        if not isinstance(self.spatial_executor, NativeSpatialExecutor):
+            raise TypeError("spatial_executor must be a NativeSpatialExecutor")
         basis, rotation = (
             reciprocal_basis(self.reciprocal_basis_Ainv),
             proper_rotation(self.crystal_to_sample),
@@ -400,6 +409,7 @@ class ConditionalStructureDetector:
                     ),
                 ),
                 ("local_composite", stack is not None),
+                ("spatial_execution", self.spatial_execution),
                 (
                     "stack",
                     np.array([])
@@ -530,6 +540,8 @@ class ConditionalStructureDetector:
             gaussian_tail_radius=self.gaussian_tail_radius,
             row_offset=r0,
             column_offset=c0,
+            execution=self.spatial_execution,
+            executor=self.spatial_executor,
         )
         return bounds, image
 
@@ -740,6 +752,8 @@ class ConditionalStructureDetector:
             gaussian_tail_radius=self.gaussian_tail_radius,
             row_offset=r0,
             column_offset=c0,
+            execution=self.spatial_execution,
+            executor=self.spatial_executor,
         )
         return bounds, value
 
