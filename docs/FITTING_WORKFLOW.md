@@ -223,7 +223,7 @@ Preserve the October 8 newer-5-degree figure style:
 | Measurements | Small open circles, gray capped count-proxy whiskers; no data smoothing. |
 | Model | Rust-colored line through the evaluated physical prediction; no independent model error points or plotting-only convolution. |
 | Background spread | Transparent blue empirical range defined above, identified separately from the count whiskers. |
-| Fit support | Green ticks mean any overlap with fitting pixels; partial overlap does not mean the entire bin was fitted. Invalid support remains gaps. |
+| Fit support | Match family-colored profile ticks to outlines on both detector panels. Derive outlines from positive native pixel memberships of fitted profile rows; retain holes and disconnected regions. Partial overlap does not mean the entire pixel or bin was fitted. Comparison-only regions are not fitted support. Invalid support remains gaps. |
 
 The current upper-sector 00L display integrates 1–22 degrees in 2theta and
 minus 10 to plus 10 degrees in azimuth. Its 210 centers run from 1.05 to 21.95
