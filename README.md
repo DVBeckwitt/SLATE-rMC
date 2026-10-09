@@ -96,6 +96,12 @@ See [native refinement](docs/NATIVE_REFINEMENT.md) for complete commands, parame
 reuse validity, recovery and scientific qualifications. Historical orchestration is archived
 at Git revision `349524d24f960198d75df8def104adbca204944a`.
 
+Native fitting and rendering now choose CPU/GPU automatically for each deposition batch.
+Follow the [automatic fitting instructions](docs/NATIVE_REFINEMENT.md#run-a-fit-with-automatic-device-selection)
+for plan settings, starting from a saved fit, execution summaries and recovery. For
+simultaneous Bragg-region and unused-profile fitting, use the
+[combined observation recipe](docs/FITTING_WORKFLOW.md#simultaneous-native-bragg-regions-and-profiles-2026-10-09).
+
 ## Interactive tools
 
 On Windows, double-click [`Launch Bi2Se3.cmd`](Launch%20Bi2Se3.cmd) to open the detector viewer

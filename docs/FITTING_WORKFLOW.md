@@ -13,6 +13,11 @@ The owners are `NativeFitObservations`, the native physical evaluator,
 `score_native_prediction` and `fit_native_parameters`. Keep one implementation
 of each physical equation, coordinate transformation and measurement operator.
 
+For a practical launch, recovery and result-inspection sequence, follow
+[running a fit with automatic device selection](NATIVE_REFINEMENT.md#run-a-fit-with-automatic-device-selection).
+Native batches select CPU/GPU automatically; the observation and background
+recipe still determines what is fitted.
+
 `render_native.py` writes numerical render diagnostics. The recent manuscript
 figures use external Matplotlib callers saved inside their diagnostic packs.
 Reuse their presentation conventions below; do not copy experiment-specific
@@ -334,6 +339,34 @@ The prior figures remain immutable. Do not present these candidates as a
 resolved whole-detector subtraction or resume their fitting stages implicitly.
 
 ## Simultaneous native Bragg regions and profiles (2026-10-09)
+
+For a new combined fit, use this sequence:
+
+1. Start from the matching specimen/acquisition's saved best physical vector and
+   its separately saved integer repeat count `N`, then
+   retain its qualification. Freeze the original Bragg-region identities and
+   training/selection/audit controls before assigning any extra profile pixels.
+2. Partition native support as described below, keeping Bragg regions and controls
+   protected. Add only unused profile support to the likelihood. Recompute raw
+   counts, areas and full covariance from those exact memberships; do not concatenate
+   overlapping peak and profile measurements as independent observations.
+3. Bind one physical predictor to the combined projection and one declared shared
+   scale/background model. Evaluate Bragg and additional profile rows at the same
+   physical candidate during each objective evaluation. With linear background
+   profiling, use `NativeLinearBackgroundProblem` through the Python fitting API;
+   retain raw counts and the required background checks. There is no CLI switch
+   that constructs this combined observation or the study's 41-knot design.
+4. Use the automatic native evaluator for that prediction. Hardware selection does
+   not change memberships, covariance, weights, quadrature or nuisance definitions.
+   Complete the starting prediction and numerical/preservation checks before a
+   bounded optimization, keeping 003 and 006 checks separate for Bi2Se3.
+5. Compare the saved starting and returned states on both Bragg-region shapes and
+   profile core/flank/tail support, with independent selection/audit accounting.
+   Detector outlines above a plot must show the native support actually used below;
+   whole display profiles remain distinct from partial-bin likelihood additions.
+
+The steps describe the supported method, not a completed new Bi2Se3 fit. The
+historical attempt and its unresolved full-prediction status follow below.
 
 Use `partition_native_region_support` to assign each positive-membership native
 pixel to the first declared observation group. Preserve fractional weights and

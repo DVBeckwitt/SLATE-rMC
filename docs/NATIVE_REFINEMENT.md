@@ -5,6 +5,102 @@ optical transport, spherical mosaic and native-pixel integration used by the
 renderer. A fit predicts the frozen native observations; moving geometry or a
 lattice never moves measured pixels into another fitting region.
 
+## Run a fit with automatic device selection
+
+1. Prepare the acquisition using [the input-adoption commands](#portable-inputs-and-saved-images).
+   Use its actual hash-prefixed physics filename, frozen observations and a complete
+   acquisition-bound fitting plan. To continue a saved best fit, place its physical
+   parameter vector in `starts` as one row, in the current declared parameter order:
+   `starts = [saved_point["parameters"]]`. The integer repeat count is separate:
+   put `saved_point["N"]` first in `repeat_choices` for a matching saved-state
+   baseline; other declared choices may follow. Retain the specimen identity,
+   units, bounds and qualification. A saved nominal candidate
+   remains nominal; changing the observation/background operator needs a new matched
+   baseline at that starting state.
+2. Keep automatic selection, which is already the default when `spatial_execution`
+   is omitted. The following is a fragment to merge into a complete plan, not a
+   standalone fitting plan:
+
+   ```json
+   {
+     "spatial_execution": "auto",
+     "workers": 1,
+     "prediction_workers": 1
+   }
+   ```
+
+   Inner `workers` must be 1. Start with one candidate worker unless separate
+   measurements justify more: candidate processes can contend for the same GPU
+   and each evaluator/group owns its calibration. Keep the existing physical
+   support, precision, quadrature and acceptance limits. `auto` requires no
+   manually selected event threshold or device. Without an available compatible
+   CUDA device/toolkit it chooses CPU and records the admission reason.
+3. Run the declared bounded fit from the repository root, writing outside it:
+
+   ```powershell
+   uv run --frozen python scripts/refine_native.py `
+     --physics C:\external\prepared\PHYSICS.json `
+     --observations C:\external\prepared\sample_observations.json `
+     --plan C:\external\fit_plan.json `
+     --output C:\external\fit.ra_diag.npz
+   ```
+
+   The first substantial batch performs bounded local timing calibration; later
+   batches owned by that evaluator reuse it. Small batches can stay on CPU while
+   larger batches use GPU within the same prediction. This changes deposition
+   execution only. Numerical qualification and the complete baseline must still
+   finish before a fit can be accepted. Leave `require_initial_qualification` at
+   its true default for qualification-gated fitting.
+4. Inspect `manifest_json` in the result/checkpoint. `spatial_execution` records
+   the requested mode; `parent_spatial_execution` and `worker_spatial_execution`
+   report decisions and calibration. Refined and reference-correction evaluators
+   retain summaries in their respective records. Counts describe attempted device
+   selections, not completed predictions. Assess `execution_status`,
+   `numerical_status`, `identification_status` and `selected` separately. A device
+   choice, low objective or optimizer termination does not establish an accepted fit.
+5. Resume an interrupted run by repeating the same command with `--resume`, the
+   same output, and unchanged plan/input/code/dependency identity. It restores
+   completed raw predictions and restarts the public optimizer; it does not restore
+   a partly evaluated source/batch. Changing `auto` to an explicit mode, changing
+   starts/support, or updating the engine requires a new output rather than reusing
+   that checkpoint. Preserve previous execution lineage when reporting reused data.
+6. Render the returned selection through the same saved plan and input bindings:
+
+   ```powershell
+   uv run --frozen python scripts/render_native.py `
+     --physics C:\external\prepared\PHYSICS.json `
+     --observations C:\external\prepared\sample_observations.json `
+     --result C:\external\fit.ra_diag.npz `
+     --output C:\external\render.ra_diag.npz
+   ```
+
+   Use `--candidate` only for the separately recorded optimizer candidate and retain
+   that label. Add `--full-image` only when a full detector image is needed; it adds
+   work. Rendering inherits the saved execution mode and records its own calibration.
+
+For an explicit comparison or diagnosis, set the plan field to `"cpu"` or `"cuda"`
+and use a new output. Explicit CUDA requires a working supported device and raises
+on failure; neither it nor an automatically selected CUDA execution silently retries
+on CPU. If a node/time budget is exhausted, inspect the recorded failure and actual
+work before another bounded attempt. Faster deposition does not resolve excessive
+adaptive refinement or justify relaxed tolerances.
+
+For Python callers, `NativeJointEvaluator(...)`, `ConditionalStructureDetector(...)`
+and `kernels.integrate_native_pixels(...)` select automatically with no extra setting.
+Read `evaluator.spatial_executor.summary()` or `kernels.spatial_executor.summary()`
+for decisions. When creating many separate kernel objects, reuse one
+`NativeSpatialExecutor` via `executor=` to retain calibration across their calls;
+the native evaluator already handles that sharing. The desktop native Simulator
+continues to request CPU under its existing numerical resource reservation.
+
+Automatic execution does not create or merge observation regions. For a combined
+Bragg-region/profile fit, first follow the
+[simultaneous-observation recipe](FITTING_WORKFLOW.md#simultaneous-native-bragg-regions-and-profiles-2026-10-09).
+The standard CLI retains its declared observation/background objective. Joint
+`NativeLinearBackgroundProblem` profiling is a Python fitting API; the external
+41-knot Bi2Se3 study is not enabled by a new CLI plan switch. Its caller can use
+the same automatic native evaluator without changing its raw-count objective.
+
 ## Automatic CPU/CUDA spatial execution
 
 Native fitting and rendering default to `spatial_execution="auto"`, selecting
