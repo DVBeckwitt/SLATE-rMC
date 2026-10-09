@@ -81,6 +81,13 @@ Monotonicity alone does not validate the background under peaks or imply that
 the true whole-detector background is radial. Collection loss, unidentified
 scattering and fitted nuisance remain possible confounders.
 
+Preserve the complete background model when handing a saved fit to another caller,
+including angular components, coefficients, native operators and qualification.
+Replacing a radial-plus-angular model with a radial-only curve is a new nuisance
+model, even if geometry and the acquisition are unchanged. Bind that change explicitly
+and repeat its control checks before reuse. Background adequacy and physical-model
+preservation are separate decisions; neither can compensate for the other.
+
 Freeze spatial selection and audit supports at the native-pixel level before
 choosing a correction. Row-held-out bins can still share training pixels.
 Preserve cross-covariance or use disjoint support; label repeatedly inspected
@@ -104,6 +111,10 @@ coefficients requires acquisition-specific evidence or an explicitly shared mode
    support and extrapolation, including constant endpoint extension. A monotone curve
    can have an unsupported level. Declare transfer assumptions under protected peaks;
    nearby controls do not prove radial symmetry or identify the background there.
+   Near a holder edge, match control and target clearance as well as radius and
+   azimuth. Count distinct spatial blocks, not just adjacent control cells. For a
+   spatial basis, report training support for the actual coefficients contributing
+   to each target footprint; smoothness regularization is not measured support.
 2. **Separate collection from propagation.** Bind the observed holder boundary and
    guard to the acquisition and apply consistent visibility rules to peaks and controls.
    Record an assumed film horizon separately: it may constrain physical propagation
@@ -279,3 +290,45 @@ The current figure is `Bi2Se3_newer5_lowtheta_with_errors_20261008.png`/`.pdf`.
 Preserve its frozen evidence rather than replacing it with a visually similar
 new calculation. The process above guides subsequent work; it does not authorize
 unbounded fitting, new observations or revival of retired campaigns.
+
+
+## PbI2 background-transfer investigation (2026-10-08)
+
+The GD1 library-polytype caller dropped the preceding fit's two angular broad
+background components. Subsequent retained-background figures inherited its
+radial-only model. At 00L 30.1 degrees, GD1 raw/background intensities were
+139.222/129.196 counts per native pixel; SiD1 values were 51.294/63.100.
+The discrepancies have opposite signs and do not support a common offset.
+Exact native extraction and the original 50-pixel radial resolution were intact.
+
+A controls-only restoration of the two broad components improved GD1 global
+control prediction but did not repair r3 or SiD1. A second, explicitly different
+comparison used whole 12-by-12 native cells contained in the original holder-clear
+control union, excluding every original profile pixel. It reused matching saved
+12-by-12 raw/model means, not subdivisions of coarse control totals. Predicted
+nominal sample intensity at most 2 counts/pixel was a declared control screen,
+not a bound on true contamination. Training, selection and audit used disjoint
+48-pixel spatial blocks; these are development checks on a previously inspected image.
+
+The nonnegative radial-by-azimuth background retained 50-pixel radial knots with
+30-degree angular knots and a fixed second-difference penalty. Its audit MAE fell
+from 2.8273 to 0.8151 counts/pixel for GD1 and from 1.0223 to 0.4973 for SiD1
+on these changed, matched control operators. SiD1's 26-33-degree negative bins
+fell from 32/35 to 0/35 without clipping; local audit MAE fell 9.0282 to 1.2671.
+Physical parameters, scale, profile operators and count covariance stayed fixed.
+
+Neither candidate was globally adopted. GD1 r3 lacks local controls matched in
+radius and holder clearance; much of its angular prediction is regularization
+or extrapolation. Its corrected 00L also retains a negative residual. SiD1
+r3-right audit MAE worsened 0.9005 to 1.0188, failing the frozen 5% regional gate
+despite global improvement. No physical fit or calibrated uncertainty follows.
+An older May background exposure is bound in historical inputs, but its transfer
+to these June acquisitions is unverified; it was not subtracted by assumption.
+
+Evidence and conditional figures are in the external
+`2026/10/09/01a11e7a-43d2-7b23-a889-d369a898d3a1` visualization directory,
+consolidated as `pbi2_background_investigation.ra_diag.npz`. It retains both
+finite attempts, native support, coefficient leverage, local block counts,
+unchanged physical state, source hashes and exact temporary caller bytes.
+The prior figures remain immutable. Do not present these candidates as a
+resolved whole-detector subtraction or resume their fitting stages implicitly.
