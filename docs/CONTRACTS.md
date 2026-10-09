@@ -1469,10 +1469,25 @@ from the still disconnected fitting Run/adoption/stage-result hooks.
 ## Bounded TRF continuation controls
 
 Python native TRF admits a full-roster vector of normalized finite-difference
-steps, retaining scalar defaults and physical bounds. Vector steps require TRF;
+steps, retaining scalar defaults and physical bounds. Vector steps require TRF
+or the explicit profiled-preservation SLSQP path;
 nonfinite, zero, unit-sized or misaligned steps reject before prediction.
-Optional `stop_requested` requires TRF and SciPy >=1.16, is checked only after
-complete iterations, and returns the accepted endpoint with status -2 without
-marking it converged or entering later starts. It cannot interrupt initial
+Optional `stop_requested` requires SciPy >=1.16 for TRF or >=1.18 for SLSQP.
+It checks iteration boundaries and returns an unconverged endpoint with status -2
+(TRF) or 99 (SLSQP), without entering later starts. An SLSQP iterate may be infeasible. It cannot interrupt initial
 preparation or an active derivative batch. Prediction callbacks still see probes;
 callers must not promote a lower probe as the returned endpoint.
+
+
+## Profiled preservation inequalities
+
+An explicit SLSQP preservation callback returns fixed named finite real margins
+on the already-profiled score point; nonnegative original margins define
+feasibility. It cannot be combined with historical explicit-scale guards. It
+must be pure and must not use audit data. Objective and nuisance definitions do
+not change. Shared bounded probes supply both derivatives in physical sensitivity
+coordinates. A declared solver-only reserve tightens the numerical search but
+never changes original-limit feasibility or minimum resolution. Converged
+eligibility and `minimum_resolved` use feasible points; lower infeasible trials
+remain diagnostic. The caller retains exact support, units, original baseline,
+limits and reserve separately from optimizer and physical qualification states.

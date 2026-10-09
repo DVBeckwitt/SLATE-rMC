@@ -625,3 +625,105 @@ curves on exactly the highlighted detector support. Software checks cover scalar
 step compatibility, vector steps, public iteration stopping, early rejection,
 formatting/lint, wheel construction and CLI import; they do not qualify the
 physical model. No assessment harness is retained in the repository.
+
+
+### October 9 constrained 00L continuation
+
+The next user-authorized stage addresses the specific preservation failure above.
+It starts at the preceding run's complete feasible trial `completed_values[14]`
+and matching raw prediction (`history[9]`, objective 241369.6483). Its protected
+00L detector RMS is 7.9963531, inside the original 8.008145951478705 ceiling.
+This is a full trial, not a derivative probe or a previously qualified endpoint.
+The seven active coordinates, N=13, frozen memberships/covariance and shared
+scale/41-knot background model are unchanged.
+
+Use `fit_native_parameters(method="slsqp", preservation_constraints=...)` to
+constrain the already-profiled total prediction. For the 498 original Bragg_0
+training cells, require `1 - mean(((prediction - raw) / area)**2) / ceiling**2 >= 0`.
+The ceiling remains 1.05 times the original baseline RMS. Keep all other regional,
+003/006 and selection limits as their original endpoint checks; audit controls
+remain final-only. Do not repurpose historical explicit-scale guards or turn
+held-out profiles/controls into new training constraints.
+
+This caller subtracts the declared solver-only margin
+`1 - (1 - 1e-6)**2`, equivalent to staying 1e-6 relative RMS inside the original
+ceiling. Original-limit margins still determine feasible candidates, convergence
+eligibility and minimum resolution. The reserve can never relax acceptance.
+SLSQP uses the unchanged combined GLS objective, physical sensitivity coordinates,
+1e-9 stopping tolerance and shared physical finite-difference probes. The caller
+checks half-step stability of both the profiled residual and the scaled constraint
+gradient before optimization. It saves original and solver limits separately.
+
+The finite contract is 10800 seconds overall, 5400 seconds for optimization,
+35 iterations and 500 fresh predictions. At iteration boundaries it reserves
+32 predictions for derivative/line-search work as well as measured time for a
+complete batch; a hard cap remains final protection. An interrupted run is not
+converged. An infeasible returned point is not eligible for selection, regardless
+of solver success. Recheck the seed and
+returned point against the original 28 numerical screens and preserve finer-rule
+non-regression against the feasible seed. The source/background and identification
+limitations stated above remain in force.
+
+
+The constrained stage completed in 2963.2765 seconds (49.4 minutes), including
+390.2165 seconds for the nominal response, 1509.7972 seconds for the finer
+response, and 867.4961 seconds for optimization. SLSQP returned success in nine
+iterations with 98 fresh predictions. The endpoint is converged and its minimum
+is resolved; this was not a timeout or a failed optimizer.
+
+The 00L constraint repair worked: the endpoint RMS is 8.008137499807354,
+below the unchanged 8.008145951478705 ceiling (4.999889% above the original
+baseline). Its original-limit margin is 2.1107674464948545e-6. All original
+regional, 003/006 and selection preservation checks pass. Audit MAE is 0.4793451
+against original 0.4753871, within the unchanged 5% allowance. Both seed and
+endpoint pass all 28 declared nominal/finer regional screens.
+
+The sole endpoint selection failure is finer-rule non-regression against the
+feasible seed:
+
+| Evaluation rule | Feasible seed objective | Endpoint objective | Endpoint minus seed |
+| --- | ---: | ---: | ---: |
+| Nominal | 241369.6483358817 | 241365.7115878401 | -3.9367480417 |
+| Finer | 241490.3311461814 | 241494.4209151263 | +4.0897689449 |
+
+Thus the apparent local improvement reverses under numerical refinement. The
+finer-rule regression is 0.00169355%, exceeding the declared arithmetic-only
+allowance of 1e-10 times the seed objective. Passing the broader regional screens
+does not establish the much smaller objective contrast. Improvement versus the
+original baseline remains 0.6988505% nominal and 0.6224384% finer, but does not
+justify promoting this endpoint. Status is `endpoint_not_selected` and
+`physical_adoption=False`; no selected candidate was saved. Do not increase the
+budget, relax the gate, or relabel the feasible seed as a converged fit. A future
+stage must resolve the objective ranking under quadrature refinement before
+claiming a further fit improvement.
+
+The unselected endpoint's active coordinates are recorded for reproducibility:
+
+| Parameter | Returned value |
+| --- | ---: |
+| Bi fractional z | 0.40019646248331475 |
+| Outer Se fractional z | 0.21255340014371177 |
+| Gaussian sigma (radian) | 0.01872451930922266 |
+| Lorentzian half-width (radian) | 0.0009152486108449473 |
+| Lorentzian probability | 0.2937829151098239 |
+| Surface fraction 0 | 0.1418947860737967 |
+| Extra film thickness (angstrom) | 500.0 |
+
+The thickness remains on its search boundary. The existing 003/006 background,
+four-source and parameter-identification qualifications remain unchanged.
+Evidence is retained externally as `bi2se3_00l_constrained_fit.ra_diag.npz`
+(SHA256 `70b92d888cbc786b36ea26dbfa57f2a162ac9cdb8031c851482f712572e48a0f`)
+and `bi2se3_00l_constrained_signed_report.ra_diag.npz` in the October 9 directory
+above. `Bi2Se3_00l_constrained_profiles.png` shows the unselected endpoint and
+exactly matching detector/profile support. The signed report explicitly records
+the failed finer-seed comparison; its selection-gates clarification expands the
+runtime manifest's shorthand about seed improvement into the actual
+non-regression and minimum-resolution conditions.
+
+Software assessment covered an independent scalar constrained-boundary oracle,
+unchanged default TRF results, shared finite-difference work, infeasible-candidate
+exclusion, solver stopping, argument validation, forward/reverse parameter-profile
+selection, formatting/lint and an offline wheel build. These software checks do
+not establish physical-model adequacy. Check caller bytes and failed/corrected
+analytic expectations are preserved in the external preservation-check packs;
+no assessment harness is retained in the repository.

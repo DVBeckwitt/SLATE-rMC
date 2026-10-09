@@ -270,6 +270,8 @@ def validate_native_search_request(
     enforce_historical_guards: bool = False,
     batched: bool = False,
     stop_requested: Callable[[], bool] | None = None,
+    preservation_constraints: Callable[[OptimizeResult], dict[str, float]] | None = None,
+    preservation_reserve: float = 0.0,
 ) -> None:
     """Validate a complete search request without calling a predictor."""
     if method not in ("slsqp", "trf"):
@@ -280,23 +282,42 @@ def validate_native_search_request(
         raise ValueError("TRF cannot enforce historical inequalities; use SLSQP")
     if batched and method == "slsqp" and Version(scipy_version) < Version("1.16"):
         raise RuntimeError("predict_many requires SciPy >= 1.16")
+    if preservation_constraints is not None:
+        if not callable(preservation_constraints):
+            raise TypeError("preservation_constraints must be callable")
+        if method != "slsqp" or enforce_historical_guards:
+            raise ValueError(
+                "profiled preservation constraints require SLSQP without historical guards"
+            )
+    reserve = np.asarray(preservation_reserve)
+    if (
+        reserve.shape != ()
+        or reserve.dtype.kind not in "fiu"
+        or not np.isfinite(reserve)
+        or reserve < 0
+        or (reserve != 0 and preservation_constraints is None)
+    ):
+        raise ValueError(
+            "preservation reserve must be a finite nonnegative scalar with constraints"
+        )
     if stop_requested is not None:
         if not callable(stop_requested):
             raise TypeError("stop_requested must be callable")
-        if method != "trf" or Version(scipy_version) < Version("1.16"):
-            raise ValueError("iteration-boundary stopping requires TRF and SciPy >= 1.16")
+        minimum_version = "1.16" if method == "trf" else "1.18"
+        if Version(scipy_version) < Version(minimum_version):
+            raise ValueError(f"{method} iteration stopping requires SciPy >= {minimum_version}")
     names = tuple(p.name for p in parameters)
     step = np.asarray(finite_difference_step)
     if (
         np.iscomplexobj(step)
         or step.shape not in ((), (len(parameters),))
-        or (step.ndim and method != "trf")
+        or (step.ndim and method != "trf" and preservation_constraints is None)
         or not np.all(np.isfinite(step))
         or np.any(step <= 0)
         or np.any(step >= 1)
     ):
         raise ValueError(
-            "finite-difference steps must be in (0, 1), scalar or one per TRF parameter"
+            "steps must lie in (0, 1); vectors require TRF or profiled preservation constraints"
         )
     if not names:
         raise ValueError("at least one declared parameter is required")
@@ -359,6 +380,8 @@ def fit_native_parameters(
     enforce_historical_guards: bool = False,
     callback=None,
     stop_requested: Callable[[], bool] | None = None,
+    preservation_constraints: Callable[[OptimizeResult], dict[str, float]] | None = None,
+    preservation_reserve: float = 0.0,
     background_problem: NativeBackgroundProblem | NativeLinearBackgroundProblem | None = None,
     mixture_parameter: str | None = None,
 ):
@@ -378,7 +401,16 @@ def fit_native_parameters(
     normalized bound units. Scalar steps retain their existing behavior.
     With SciPy >= 1.16, stop_requested is checked after complete TRF iterations;
     a true value returns the accepted endpoint as unconverged, with status -2.
-    It stops subsequent starts too. Reserve a whole derivative batch for stopping.
+    SLSQP stopping requires SciPy >= 1.18 and returns status 99 instead.
+    Either stop ends subsequent starts. Reserve a whole derivative batch for stopping.
+    Optional SLSQP preservation_constraints returns a fixed ordered dict of named,
+    dimensionless margins >= 0 on the already profiled point. It must be pure and
+    must not use audit data. This path shares bounded probes for the objective and
+    constraint derivatives and uses declared physical sensitivity scales. It leaves
+    the objective and nuisance profile unchanged; historical guards cannot be mixed.
+    Vector difference steps are admitted here too. Feasible evaluated and returned
+    points remain separate from lower infeasible trials. preservation_reserve is
+    subtracted only from solver margins; original margins define feasibility.
     """
     if (
         background_problem is not None
@@ -409,6 +441,8 @@ def fit_native_parameters(
         enforce_historical_guards=enforce_historical_guards,
         batched=predict_many is not None,
         stop_requested=stop_requested,
+        preservation_constraints=preservation_constraints,
+        preservation_reserve=preservation_reserve,
     )
     names = tuple(p.name for p in parameters)
     lower, upper = np.array([(p.lower, p.upper) for p in parameters]).T
@@ -446,6 +480,38 @@ def fit_native_parameters(
     )
     width = upper - lower
     best, feasible, converged = None, None, None
+    preservation_names = None
+
+    def assess_preservation(point):
+        nonlocal preservation_names
+        if preservation_constraints is None:
+            return point.scores["guards_pass"]
+        margins = preservation_constraints(point)
+        if (
+            not isinstance(margins, dict)
+            or not margins
+            or any(not isinstance(name, str) or not name for name in margins)
+        ):
+            raise ValueError("preservation constraints must return named scalar margins")
+        labels = tuple(margins)
+        values = np.asarray(list(margins.values()))
+        if (
+            values.shape != (len(labels),)
+            or values.dtype.kind not in "fiu"
+            or np.any(~np.isfinite(values))
+            or (preservation_names is not None and labels != preservation_names)
+        ):
+            raise ValueError("preservation margins must be finite real scalars with a fixed roster")
+        preservation_names = labels
+        values = np.array(values, dtype=float, copy=True)
+        if np.any(~np.isfinite(values)):
+            raise ValueError("preservation margins exceed float64 range")
+        values.setflags(write=False)
+        point.preservation_names = labels
+        point.preservation_margins = values
+        point.preservation_feasible = bool(np.all(values >= 0))
+        return point.preservation_feasible
+
     runs = []
     evaluation_count = 0
     effective_starts = np.array(starts, dtype=float, copy=True)
@@ -484,11 +550,13 @@ def fit_native_parameters(
             )
             if best is None or point.objective < best.objective:
                 best = point
-            if point.scores["guards_pass"] and (
+            if assess_preservation(point) and (
                 feasible is None or point.objective < feasible.objective
             ):
                 feasible = point
-        incumbent = feasible if enforce_historical_guards else best
+        incumbent = (
+            feasible if enforce_historical_guards or preservation_constraints is not None else best
+        )
         if incumbent is not None:
             effective_starts = np.vstack([incumbent.parameter_values, effective_starts])
     _, distinct = np.unique(effective_starts, axis=0, return_index=True)
@@ -498,6 +566,8 @@ def fit_native_parameters(
         last_x, last_point = None, None
         prediction_buffer = {}
         raw_cache = {}
+        scored_cache = {}
+        difference_x, difference_batch = None, None
         cache_limit = 3 * len(active) + 4
         scale_reference = None
 
@@ -580,10 +650,15 @@ def fit_native_parameters(
             raw_cache=raw_cache,
             scale_reference=scale_reference,
             start_index=start_index,
+            scored_cache=scored_cache,
+            cache_limit=cache_limit,
         ):
             nonlocal last_x, last_point, best, feasible, evaluation_count
             if last_x is not None and np.array_equal(x, last_x):
                 return last_point
+            key = x.tobytes()
+            if key in scored_cache:
+                return scored_cache[key]
             values = physical_values(x)
             raw = prediction_buffer.get(x.tobytes())
             if raw is None:
@@ -605,17 +680,28 @@ def fit_native_parameters(
             point.start_index = start_index
             if best is None or point.objective < best.objective:
                 best = point
-            if point.scores["guards_pass"] and (
+            if assess_preservation(point) and (
                 feasible is None or point.objective < feasible.objective
             ):
                 feasible = point
             evaluation_count += 1
             last_x, last_point = x.copy(), point
+            if preservation_constraints is not None:
+                scored_cache[key] = point
+                if len(scored_cache) > cache_limit:
+                    scored_cache.pop(next(iter(scored_cache)))
             if callback is not None:
                 callback(point)
             return point
 
-        def residual_jacobian(x):
+        def difference_points(x):
+            nonlocal difference_x, difference_batch
+            if (
+                preservation_constraints is not None
+                and difference_x is not None
+                and np.array_equal(x, difference_x)
+            ):
+                return difference_batch
             center = evaluate(x)
             forward, backward = 1.0 - x, x
             step = np.asarray(finite_difference_step)
@@ -641,8 +727,19 @@ def fit_native_parameters(
                 if predict_many is not None
                 else [evaluate(t) for t in trials]
             )
+            batch = center, points, actual_steps
+            if preservation_constraints is not None:
+                difference_x, difference_batch = x.copy(), batch
+            return batch
+
+        def residual_jacobian(x):
+            center, points, actual_steps = difference_points(x)
             residuals = np.array([p.optimization_residual for p in points])
             return ((residuals - center.optimization_residual) / actual_steps[:, None]).T
+
+        def stop_after_iteration(_):
+            if stop_requested():
+                raise StopIteration
 
         constraints = ()
         if enforce_historical_guards:
@@ -679,11 +776,6 @@ def fit_native_parameters(
                 callback(literal)
             trf_options = {}
             if stop_requested is not None:
-
-                def stop_after_iteration(_):
-                    if stop_requested():
-                        raise StopIteration
-
                 trf_options["callback"] = stop_after_iteration
             result = least_squares(
                 lambda x: evaluate(x).optimization_residual,
@@ -700,6 +792,51 @@ def fit_native_parameters(
                 gtol=1e-6,
                 **trf_options,
             )
+        elif len(active) and preservation_constraints is not None:
+            coordinate_scale = (
+                np.array([parameters[i].sensitivity_scale for i in active]) / width[active]
+            )
+
+            if np.any(~np.isfinite(coordinate_scale)) or np.any(coordinate_scale <= 0):
+                raise ValueError("preservation coordinate scales must be finite and positive")
+
+            def normalized_values(z, initial=initial, coordinate_scale=coordinate_scale):
+                return np.clip(initial + coordinate_scale * z, 0.0, 1.0)
+
+            def preservation_jacobian(z, coordinate_scale=coordinate_scale):
+                center, points, actual_steps = difference_points(normalized_values(z))
+                margins = np.array([p.preservation_margins for p in points])
+                return (
+                    (margins - center.preservation_margins) / actual_steps[:, None]
+                ).T * coordinate_scale
+
+            def objective_jacobian(z, coordinate_scale=coordinate_scale):
+                x = normalized_values(z)
+                center, _, _ = difference_points(x)
+                return 2 * (center.optimization_residual @ residual_jacobian(x)) * coordinate_scale
+
+            result = minimize(
+                lambda z: evaluate(normalized_values(z)).objective / int(observations.valid.sum()),
+                np.zeros(len(active)),
+                jac=objective_jacobian,
+                method="SLSQP",
+                bounds=list(
+                    zip(-initial / coordinate_scale, (1 - initial) / coordinate_scale, strict=True)
+                ),
+                constraints=(
+                    {
+                        "type": "ineq",
+                        "fun": lambda z: (
+                            evaluate(normalized_values(z)).preservation_margins
+                            - preservation_reserve
+                        ),
+                        "jac": preservation_jacobian,
+                    },
+                ),
+                callback=stop_after_iteration if stop_requested is not None else None,
+                options=dict(maxiter=maximum_iterations, ftol=1e-9),
+            )
+            result.x = normalized_values(result.x)
         elif len(active) or enforce_historical_guards:
             options = dict(maxiter=maximum_iterations, eps=finite_difference_step, ftol=1e-9)
             if predict_many is not None:
@@ -711,6 +848,7 @@ def fit_native_parameters(
                 bounds=[(0.0, 1.0)] * len(active)
                 + ([(0.0, None)] if enforce_historical_guards else []),
                 constraints=constraints,
+                callback=stop_after_iteration if stop_requested is not None else None,
                 options=options,
             )
         else:
@@ -725,15 +863,21 @@ def fit_native_parameters(
         point.function_evaluations = result.get("nfev")
         point.jacobian_evaluations = result.get("njev")
         point.optimality = result.get("optimality")
+        if preservation_constraints is not None:
+            multipliers = result.get("multipliers")
+            point.preservation_multipliers = (
+                None if multipliers is None else np.array(multipliers, dtype=float, copy=True)
+            )
         point.method = method
         runs.append(point)
         if (
             point.optimizer_converged
             and (not enforce_historical_guards or point.scores["guards_pass"])
+            and (preservation_constraints is None or point.preservation_feasible)
             and (converged is None or point.objective < converged.objective)
         ):
             converged = point
-        if point.optimizer_status == -2:
+        if point.optimizer_status in (-2, 99):
             break
     return OptimizeResult(
         runs=tuple(runs),
@@ -747,6 +891,9 @@ def fit_native_parameters(
         numerical_status="not_qualified",
         identification_status="not_profiled",
         guard_conditioned=enforce_historical_guards,
+        preservation_conditioned=preservation_constraints is not None,
+        preservation_reserve=float(preservation_reserve),
+        preservation_names=() if preservation_names is None else preservation_names,
         fixed_parameters=tuple(fixed_values),
         profiled_parameters=() if mixture_parameter is None else (mixture_parameter,),
         nonlinear_parameter_count=len(active),
@@ -755,7 +902,11 @@ def fit_native_parameters(
         observation_revision=observations.input_revision,
         minimum_resolved=(
             converged is not None
-            and (feasible if enforce_historical_guards else best).objective
+            and (
+                feasible
+                if enforce_historical_guards or preservation_constraints is not None
+                else best
+            ).objective
             >= converged.objective - 1e-7 * max(1.0, abs(converged.objective))
         ),
     )
@@ -859,7 +1010,9 @@ def profile_native_parameter(
                     result.evaluation_count += previous.evaluation_count
                     minimum = result.best_converged
                     admissible = (
-                        result.best_feasible if result.guard_conditioned else result.best_evaluated
+                        result.best_feasible
+                        if result.guard_conditioned or result.preservation_conditioned
+                        else result.best_evaluated
                     )
                     result.minimum_resolved = (
                         minimum is not None
@@ -890,6 +1043,7 @@ def profile_native_parameter(
         fits=curves,
         interval_status="raw_profile_requires_threshold_calibration",
         guard_conditioned=options.get("enforce_historical_guards", False),
+        preservation_conditioned=options.get("preservation_constraints") is not None,
     )
 
 
@@ -897,7 +1051,9 @@ def native_fit_candidate(result):
     """Use one candidate for qualification, reporting and rendering."""
     if result.best_converged is not None:
         return result.best_converged
-    if result.guard_conditioned and result.best_feasible is not None:
+    if (
+        result.guard_conditioned or result.get("preservation_conditioned", False)
+    ) and result.best_feasible is not None:
         return result.best_feasible
     return result.best_evaluated
 

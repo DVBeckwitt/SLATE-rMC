@@ -858,14 +858,16 @@ entry is a step in normalized bound coordinates and must lie strictly between
 zero and one. A desired physical step `h_i` is declared as
 `h_i / (upper_i - lower_i)`; sensitivity scales and search bounds need not imply
 the same derivative step. The existing bound-aware direction and representability
-checks apply. Vector steps are not admitted for SLSQP. Scalar defaults and
+checks apply. SLSQP admits vector steps only with explicit profiled preservation
+constraints below. Scalar defaults and
 TRF `ftol=xtol=gtol=1e-6` are unchanged.
 
-`fit_native_parameters(..., stop_requested=callable)` requires TRF and SciPy
-1.16 or newer. It checks the callable after complete optimizer iterations, not
-inside a derivative batch or before the initial prediction. A true result uses
-SciPy's public iteration callback to return the accepted point with
-`optimizer_status=-2` and `optimizer_converged=False`, and skips later starts.
+`fit_native_parameters(..., stop_requested=callable)` requires SciPy 1.16 or newer
+for TRF and 1.18 or newer for SLSQP. It checks the callable at optimizer iteration
+boundaries, not inside a derivative batch or before the initial prediction.
+SciPy's public callback returns an unconverged endpoint with `optimizer_status=-2`
+for TRF or `99` for SLSQP and skips later starts. An SLSQP iterate can be infeasible;
+its constraint and selection checks remain required.
 The per-evaluation `callback` still includes derivative probes and is independent.
 An initially converged start can finish without an iteration callback.
 
@@ -874,6 +876,38 @@ not count all probes. Budget prediction, nuisance fitting, scoring and checkpoin
 work together. A stopped or evaluation-limited endpoint is retained evidence,
 not a converged fit. Keep `minimum_resolved`, returned status, actual evaluations
 and numerical/predictive gates separate from the best evaluated probe.
+
+## Preservation constraints on profiled predictions
+
+For a Python SLSQP call, `preservation_constraints(point)` may return an ordered
+`dict[str, float]` of named dimensionless margins. The roster must stay fixed,
+values must be finite real scalars, and nonnegative margins mean feasible.
+The pure callback receives the already profiled physical prediction, global scale
+and background. It must not mutate the point or use audit data. The caller binds
+training support, units, baseline and thresholds in its immutable input record.
+This is a declared preservation-conditioned fit, not independent validation or a
+new noise likelihood. Historical explicit-scale guards cannot be combined with it.
+
+For a protected detector region with per-row native area `A`, total prediction
+`P`, raw data `Y`, and fixed RMS ceiling `L`, use
+`1 - mean(((P - Y) / A)**2) / L**2 >= 0`. The objective and nuisance profile remain
+unchanged. The optimizer may evaluate infeasible trials; only a feasible returned
+endpoint is eligible for selection. Best evaluated and best feasible points stay
+separate, and `minimum_resolved` compares with original-limit feasible points.
+
+This SLSQP path uses physical sensitivity coordinates and one cached bounded
+finite-difference batch for both objective and constraint derivatives. Steps are
+still declared in normalized bound units on the full parameter roster. Default
+TRF and historical SLSQP behavior remain unchanged. `preservation_reserve=0`
+defaults to the exact inequality; a declared nonnegative reserve is subtracted
+only from solver margins. Original margins still define feasibility and minimum
+resolution. A reserve can therefore leave a minimum unresolved if a meaningfully
+better original-limit-feasible point exists; it never relaxes that gate.
+
+Results expose named margins, feasibility, reserve, preservation conditioning and
+available SLSQP QP multipliers separately from optimizer status. Multipliers do
+not qualify the physical model. SLSQP uses its existing `ftol=1e-9`; see the
+[public solver contract](https://docs.scipy.org/doc/scipy/reference/optimize.minimize-slsqp.html).
 
 ## Batched finite-difference predictions
 
