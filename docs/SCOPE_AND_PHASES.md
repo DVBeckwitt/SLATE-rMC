@@ -145,6 +145,6 @@ per-material workflow scripts are retired; their immutable scientific evidence r
 ## Phase discipline
 
 Use the current `AGENTS.md`, `WORKTREE_LAUNCH.md` and `docs/VALIDATION.md` for narrow,
-reviewable changes. Keep one writer for each checkout and retain only `main` plus the
-authorized `codex/desktop-ui-implementation` branch. Historical numbered tasks
+reviewable changes. Keep one coding writer and only the local `main` branch.
+Use detached checkouts for isolated work. Historical numbered tasks
 are provenance; their retired test/proof campaigns are not current work instructions.

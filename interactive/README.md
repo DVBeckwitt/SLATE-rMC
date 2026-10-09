@@ -1,7 +1,7 @@
 # Interactive tools
 
 This directory contains every active, user-driven visualization entry point in the repository.
-Batch simulations and proof utilities remain in `scripts/`; the immutable original-RA-SIM snapshot
+Batch simulation, fitting and result tools remain in `scripts/`; the immutable original-RA-SIM snapshot
 under `reference/` is reference material rather than a supported application.
 
 Install the visualization dependencies from the repository root:

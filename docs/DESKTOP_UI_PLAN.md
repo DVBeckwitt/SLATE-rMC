@@ -1,7 +1,11 @@
 # Native desktop UI grand plan
 
 Status: accepted feature scope; staged implementation in progress.
-Updated: 2026-10-01. Delivery breakdown incorporates the audited plan at `a80e995`.
+The desktop UI was integrated into main at `410ff7f` on 2026-10-08; its separate
+branch is retired. The historical acceptance counts and unfinished capabilities
+below remain unchanged by integration. Current branch policy is main-only.
+Delivery checkpoint: 2026-10-01; branch policy updated 2026-10-08.
+The delivery breakdown incorporates the audited plan at `a80e995`.
 Current accepted checklist: 25/46; 21 items remain after root review of `02a0af9` on 2026-10-01.
 Five of 16 original assignments are accepted: 01, 02, 07, 08 and 09; 11 remain incomplete.
 Root accepted U08/U05c/U08c/U10a/U11/U13 in addition to the standing 19 conditions.
@@ -839,9 +843,9 @@ components; remove discarded alternatives and all temporary checking code.
 
 #### U00/U08a implementation checkpoint (2026-09-28)
 
-For this supervised implementation, the user requested `codex/desktop-ui-implementation` in the
-isolated `desktop-ui-plan` checkout. Keep the branch for review; do not fast-forward `main` at
-these checkpoints. This is a task-specific exception to the usual one-local-branch handoff.
+This historical checkpoint used `codex/desktop-ui-implementation` in the isolated
+`desktop-ui-plan` checkout. Its temporary branch-preservation exception expired when
+the UI was merged at `410ff7f` and the user requested main-only cleanup.
 
 Reference machine for the U00 decision: Intel Core i9-13900K (32 logical CPUs), 64 GiB RAM,
 NVIDIA GeForce RTX 3060 (12 GiB, driver 572.47), Windows, 1920x1080 at 74.99 Hz and 1.0 device

@@ -153,8 +153,8 @@ test/proof evaluator is supplied. See [docs/DREAM_RSI.md](docs/DREAM_RSI.md).
 
 ## Worktree isolation
 
-Keep `main` and the explicitly authorized `codex/desktop-ui-implementation` branch.
-Preserve the UI branch and its active checkout; do not merge or reset it during core cleanup.
+Keep only the local `main` branch. The desktop UI is integrated into main.
+Preserve any uncommitted work before retiring branches or checkouts.
 Reuse a suitable free isolated worktree from current main,
 accounting for all existing changes first. An isolated checkout may use detached HEAD;
 review its coherent commit and fast-forward main after checking both checkouts are clean.
@@ -192,8 +192,8 @@ one JSON manifest. No sidecars or diagnostic directories.
 - Perform only the external checks needed for concrete remaining risks; report their scope.
 - Preserve fitting qualification states and physical constraints.
 - Report added/deleted lines separately for production and retired development infrastructure.
-- End with one coherent commit, a clean main checkout and only the local `main` and
-  `codex/desktop-ui-implementation` branches. Preserve the UI checkout's ongoing changes.
+- End with one coherent commit, a clean main checkout and only the local `main` branch.
+  Preserve detached recovery checkouts while they contain work not yet safely archived.
 
 Report the commit, behavior changed, checks performed and remaining limitations. Do not claim
 numerical validation from software checks. End the Codex response with exactly READY or BLOCKED.

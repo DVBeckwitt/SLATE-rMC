@@ -33,7 +33,7 @@ nonexistent verifier; use README and the actual tracked tree instead.
 Before retiring branches/worktrees, all 33 original worktree HEADs and named refs were
 preserved in an external Git bundle. A separate verified archive contains 77 changed,
 untracked or non-cache ignored files plus tracked/staged patches. The active UI working
-files were excluded from cleanup and remain owned by its branch.
+files were excluded from that initial cleanup; the subsequent integration is recorded below.
 
 Archive location on this workstation:
 `C:/Users/Kenpo/.codex/visualizations/2026/10/01/01a0f7e3-277a-7070-9b34-7ded40ce414d/`
@@ -45,5 +45,18 @@ Archive location on this workstation:
 - `slate_repository_cleanup_archive_20261008.json`: original paths, heads and file hashes.
 
 Use `git bundle verify <bundle>` and `git bundle list-heads <bundle>` before recovery.
-Restore to a separate checkout; do not apply archived changes over the current UI or main.
+Restore to a separate checkout; do not apply archived changes over main or a recovery checkout.
 Unmerged scientific features are preserved history, not implicitly accepted into main.
+
+## Desktop integration and main-only cleanup
+
+Merge `410ff7fb7db1df962e2d1526c6d20803b877862b` integrated the desktop branch and
+its seven pending UI files with the current numerical core. The pending files were
+preserved with hashes in the external `ui_merge_snapshot_20261008` directory before
+integration. The original checkout retains those exact files in detached HEAD.
+
+The UI branch contained no commits absent from main and was deleted at the user's
+request. Only the local `main` branch remains; protected detached checkouts are not
+branches and retain recovery material. The prior branch-preservation exception is
+retired. Current fitting, background, qualification and figure conventions remain
+in their authoritative documents, and native desktop fitting limitations remain explicit.

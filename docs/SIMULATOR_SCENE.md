@@ -1,8 +1,9 @@
 # Simulator scene controls
 
 The Simulator workspace shows detector output beside the current experiment
-geometry. Open the existing **Launch SLATE UI.cmd**, choose **Simulator**, and
-load or edit a draft through **Menu > Advanced parameters**. That action also
+geometry. From the repository root run
+`uv run --extra visualization python interactive/slate_app.py`, choose **Simulator**,
+and load or edit a draft through **Project > Advanced parameters**. That action also
 opens the retained full parameter editor. Geometry appears before an intensity
 result; opening the scene or changing its camera does not calculate intensity.
 

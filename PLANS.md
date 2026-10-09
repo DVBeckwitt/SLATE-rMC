@@ -24,9 +24,9 @@ fitting, new-acquisition preparation and daily use, each with dependencies and a
 Milestones group capabilities without blocking independent tasks. Simulator completion covers both
 configured and native physical-input routes; new-acquisition preparation has a separate scientific
 decision point before its implementation can be estimated.
-The UI is integrated with the current core on main. Preserve the original
-`codex/desktop-ui-implementation` checkout and its pending edits. The UI roadmap
-records historical acceptance and remaining gaps; integration does not close them.
+The UI is integrated with the current core on main; its separate branch is retired.
+The UI roadmap records historical acceptance and remaining gaps; integration does not
+close them.
 Native fitting Run, stage-result import, indexed adoption and new-acquisition
 numerical preparation remain unavailable. The current scientific procedure and
 publication figure/error-bar conventions remain in
