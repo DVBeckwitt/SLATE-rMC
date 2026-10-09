@@ -380,6 +380,49 @@ class NativePixelRegionProjection:
         return _project_native_pixel_field(projector, selected_value, selected_variance)
 
 
+def partition_native_region_support(
+    projection: NativePixelRegionProjection, row_groups: Sequence[ArrayLike]
+) -> NativePixelRegionProjection:
+    """Give each native pixel to the first listed row group that uses it.
+
+    Within-group fractional memberships and overlap are preserved. Unlisted rows
+    have empty support; row identities and observation count do not change. This
+    permits joint peak/profile/control observations without treating repeated
+    pixels as independent evidence. Recompute counts, areas, validity and full
+    covariance on the returned projection before fitting.
+    """
+    priority = np.full(projection.observation_count, -1, dtype=np.int64)
+    for index, group in enumerate(row_groups):
+        rows = np.asarray(group)
+        if rows.ndim != 1 or (rows.size and rows.dtype.kind not in "iu"):
+            raise ValueError("row groups must contain one-dimensional integer indices")
+        rows = rows.astype(np.int64)
+        if (
+            np.any((rows < 0) | (rows >= projection.observation_count))
+            or np.unique(rows).size != rows.size
+            or np.any(priority[rows] >= 0)
+        ):
+            raise ValueError("each observation row may belong to only one valid group")
+        priority[rows] = index
+    rank = priority[projection.observation_row]
+    admitted = rank >= 0
+    first = np.full(len(projection.flat_pixel_index), len(row_groups), dtype=np.int64)
+    np.minimum.at(first, projection.pixel_column_index[admitted], rank[admitted])
+    keep = admitted & (rank == first[projection.pixel_column_index])
+    if not np.any(keep):
+        raise ValueError("partition must retain positive native support")
+    columns, compact = np.unique(projection.pixel_column_index[keep], return_inverse=True)
+    return NativePixelRegionProjection(
+        projection.detector_shape_rc,
+        projection.flat_pixel_index[columns],
+        projection.observation_row[keep],
+        compact,
+        projection.detector_area_weight_px2[keep],
+        projection.observation_count,
+        projection.projection_revision + ":ordered-native-support-partition.v1",
+    )
+
+
 def _project_native_pixel_field(
     projector: csr_matrix,
     value: FloatArray,
@@ -639,4 +682,5 @@ __all__ = [
     "NativePixelRegionProjection",
     "compile_continuous_rectangle_quadrature",
     "compile_native_pixel_region_projection",
+    "partition_native_region_support",
 ]

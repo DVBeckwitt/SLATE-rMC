@@ -580,8 +580,13 @@ def load_joint_geometry_handoff(
         specimen_cif
     ) or detector_config.material.cif_path != location(detector_cif):
         raise ValueError("joint geometry handoff CIF references changed")
-    series = load_osc_geometry_series(manifest, source_bytes=location(manifest).read_bytes())
-    osc_ids = tuple(identity(image.osc_path) for image in series.images)
+    series = load_osc_geometry_series(
+        manifest, source_bytes=location(manifest).read_bytes(), stored_paths=stored_paths
+    )
+    original_images = tuple(
+        _load_identity(item, "OSC image", stored_paths) for item in document["osc_images"]
+    )
+    osc_ids = tuple(identity(original) for original in original_images)
     report_record = _mapping(
         json.loads(location(report).read_text(encoding="utf-8")), "joint report"
     )
@@ -595,7 +600,9 @@ def load_joint_geometry_handoff(
         for image in series.images
     )
     if (
-        series.config_path != specimen
+        series.config_path != location(specimen)
+        or tuple(image.osc_path for image in series.images)
+        != tuple(location(original) for original in original_images)
         or tuple(image.image_id for image in series.images) != tuple(document["image_ids"])
         or osc_ids != tuple(document["osc_images"])
         or not np.allclose(

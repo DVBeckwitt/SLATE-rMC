@@ -161,6 +161,118 @@ def profile_mosaic_amplitudes(observations, components, background, *, eta_bound
 
 
 @dataclass(frozen=True, slots=True)
+class NativeLinearBackgroundProblem:
+    """Nonnegative linear background masses with one jointly profiled exposure.
+
+    Columns must already use the observation's exact native memberships. A
+    monotone radial field is represented by cumulative piecewise-linear columns,
+    whose nonnegative coefficients are successive density drops. This class owns
+    the cone solve, not the caller's spatial basis or support assumptions.
+    """
+
+    design_count: np.ndarray
+    maximum_iterations: int = 10000
+
+    def __post_init__(self):
+        raw = np.asarray(self.design_count)
+        if (
+            raw.ndim != 2
+            or min(raw.shape) < 1
+            or np.iscomplexobj(raw)
+            or np.any(~np.isfinite(raw))
+            or np.any(raw < 0)
+            or type(self.maximum_iterations) is not int
+            or self.maximum_iterations < 1
+        ):
+            raise ValueError("linear background needs a finite nonnegative mass design and budget")
+        design = np.array(raw, dtype=float, copy=True)
+        design.setflags(write=False)
+        object.__setattr__(self, "design_count", design)
+
+    @property
+    def observation_count(self):
+        return self.design_count.shape[0]
+
+    def profile(self, observations, raw, *, callback=None, mixture_bounds=None):
+        if mixture_bounds is not None:
+            raise ValueError("linear background does not profile mosaic mixtures")
+        if (
+            observations.objective_kind != "gls"
+            or observations.exposure_index is not None
+            or observations.allow_guard_constraints
+            or len(observations.net_count) != self.observation_count
+        ):
+            raise ValueError("linear background requires single-exposure raw GLS without guards")
+        raw = np.asarray(raw)
+        if (
+            raw.shape != (self.observation_count,)
+            or np.iscomplexobj(raw)
+            or np.any(~np.isfinite(raw))
+            or np.any(raw < 0)
+        ):
+            raise ValueError("linear background requires an aligned nonnegative physical signal")
+        design = np.column_stack((raw, self.design_count))
+        white = solve_triangular(observations._cholesky, design[observations.valid], lower=True)
+        norms = np.linalg.norm(white, axis=0)
+        if np.any(~np.isfinite(white)) or np.any(~np.isfinite(norms)):
+            raise ValueError("linear background whitening or column norms overflowed")
+        if norms[0] <= np.finfo(float).tiny:
+            raise ValueError("linear background requires scale-identifying diffraction")
+        norms = np.where(norms > np.finfo(float).tiny, norms, 1.0)
+        normalized = white / norms
+        try:
+            coefficients, _ = nnls(
+                normalized,
+                observations.whiten(observations.net_count),
+                maxiter=self.maximum_iterations,
+            )
+        except RuntimeError as exc:
+            raise BackgroundProfileError(OptimizeResult(success=False, message=str(exc))) from exc
+        target = observations.whiten(observations.net_count)
+        gradient = normalized.T @ (normalized @ coefficients - target)
+        active = coefficients > 0
+        kkt_error = float(np.max(np.where(active, abs(gradient), np.maximum(-gradient, 0))))
+        kkt_relative = kkt_error / max(1.0, float(np.linalg.norm(target)))
+        rank = int(np.linalg.matrix_rank(normalized))
+        coefficients /= norms
+        signal = coefficients[0] * raw
+        background = self.design_count @ coefficients[1:]
+        residual = observations.whiten(signal + background - observations.net_count)
+        objective = float(residual @ residual)
+        if not np.isfinite(objective) or any(
+            np.any(~np.isfinite(v)) for v in (coefficients, signal, background, residual)
+        ):
+            raise ValueError("linear background solve produced nonfinite results")
+        result = OptimizeResult(
+            scale=float(coefficients[0]),
+            coefficients=coefficients[1:],
+            signal_prediction_count=signal,
+            background_prediction_count=background,
+            prediction_count=signal + background,
+            residual=residual,
+            data_residual=residual,
+            penalty_residual=np.empty(0),
+            data_objective=objective,
+            penalty_objective=0.0,
+            objective=objective,
+            success=True,
+            message="nonnegative linear least-squares KKT satisfied"
+            if kkt_relative <= 1e-10
+            else "nonnegative linear least-squares KKT failed",
+            amplitude_kkt_relative_error=kkt_relative,
+            design_rank=rank,
+            conditional_coefficients_unique=True if rank == normalized.shape[1] else None,
+            identification_kind="conditional linear design only; no joint physical identification",
+        )
+        result.success = kkt_relative <= 1e-10
+        if not result.success:
+            raise BackgroundProfileError(result)
+        if callback is not None:
+            callback(result)
+        return result
+
+
+@dataclass(frozen=True, slots=True)
 class NativeBackgroundProblem:
     """One fixed pixel design, ownership W, absolute penalty R and immutable start.
 
@@ -211,6 +323,10 @@ class NativeBackgroundProblem:
         for array in (operator.data, operator.indices, operator.indptr):
             array.setflags(write=False)
         object.__setattr__(self, "ownership", operator)
+
+    @property
+    def observation_count(self):
+        return self.ownership.shape[0]
 
     def mass_and_jacobian(self, beta):
         """Sum exp(X beta) over exact pixel footprints, never exponentiate averages."""

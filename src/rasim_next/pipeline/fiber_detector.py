@@ -993,14 +993,16 @@ def _angular_intervals(q, bounds):
 
 
 @numba.njit(nogil=True)
-def _angular_inverse_cdf(target, left, right, centers, widths, offsets, uniform_mass, fraction):
+def _angular_inverse_cdf(
+    target, left, right, centers, widths, offsets, uniform_mass, fraction, require_cdf=False
+):
     value = left + (right - left) * fraction
     for iteration in range(150):
         cdf, density = _angular_cdf_density(value, centers, widths, offsets, uniform_mass)
         error = cdf - target
         if not np.isfinite(error) or not np.isfinite(density) or density <= 0:
             raise ValueError("angular inverse CDF requires a finite positive density")
-        if abs(error) < 2e-15 or right - left < 2e-14:
+        if abs(error) < 2e-15 or (not require_cdf and right - left < 2e-14):
             return value, density
         if error > 0:
             right = value
@@ -1008,7 +1010,9 @@ def _angular_inverse_cdf(target, left, right, centers, widths, offsets, uniform_
             left = value
         proposed = value - error / density if iteration < 70 else 0.5 * (left + right)
         value = proposed if left < proposed < right else 0.5 * (left + right)
-    raise ValueError("angular inverse CDF did not converge within its iteration budget")
+    raise ValueError(
+        "angular inverse CDF did not converge within its iteration budget", error, right - left
+    )
 
 
 def _resolved_angular_cdf_panels(
@@ -1277,10 +1281,18 @@ def _local_m0_importance_block(axial, pdf, unit, first, last, bounds, centers, w
                 offsets,
                 0.2,
                 remainder / arc_mass[k],
+                True,
             )
             error = _angular_cdf_density(phi, centers[i], widths[i], offsets, 0.2)[0] - cdf_target
             if not left[k] <= phi < right[k] or abs(error) > 2e-15:
-                raise ValueError("local-m0 inverse CDF failed its original arc bracket")
+                raise ValueError(
+                    "local-m0 inverse CDF failed its original arc bracket",
+                    phi - left[k],
+                    right[k] - phi,
+                    error,
+                    cdf_left[k],
+                    cdf_left[k] + arc_mass[k],
+                )
             index[count], azimuth[count] = i, phi
             mass[count] = total / (len(axial) * strata * pdf[i] * density)
             count += 1

@@ -16,6 +16,7 @@ from rasim_next.fitting.indexed_series import IndexedGeometryImage
 from rasim_next.geometry import AngleFrame
 from rasim_next.geometry.instrument import CompiledInstrument
 from rasim_next.io.osc import read_osc
+from rasim_next.io.storage import resolve_storage_path
 from rasim_next.pipeline.configured_simulation import (
     ConfiguredGeometryInputs,
     GeometryOnlyEwaldContext,
@@ -157,6 +158,7 @@ def load_osc_geometry_series(
     path: str | Path,
     *,
     source_bytes: bytes | None = None,
+    stored_paths: Mapping[Path, Path] | None = None,
 ) -> OscGeometrySeriesConfiguration:
     """Load one strict, manifest-relative OSC geometry series."""
 
@@ -193,7 +195,9 @@ def load_osc_geometry_series(
         images.append(
             OscGeometryImageConfiguration(
                 image_id=data["image_id"],
-                osc_path=manifest_path.parent / data["osc_path"],
+                osc_path=resolve_storage_path(
+                    manifest_path.parent / data["osc_path"], stored_paths
+                ),
                 axis_rotation_angles_deg=_finite_angles(
                     data["axis_rotation_angles_deg"],
                     f"images[{index}].axis_rotation_angles_deg",
@@ -201,7 +205,7 @@ def load_osc_geometry_series(
             )
         )
     return OscGeometrySeriesConfiguration(
-        config_path=manifest_path.parent / simulation_config,
+        config_path=resolve_storage_path(manifest_path.parent / simulation_config, stored_paths),
         incidence_axis_index=incidence_axis_index,
         images=tuple(images),
         qualification_profile=document.get("qualification_profile"),

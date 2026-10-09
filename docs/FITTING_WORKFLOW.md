@@ -332,3 +332,55 @@ finite attempts, native support, coefficient leverage, local block counts,
 unchanged physical state, source hashes and exact temporary caller bytes.
 The prior figures remain immutable. Do not present these candidates as a
 resolved whole-detector subtraction or resume their fitting stages implicitly.
+
+## Simultaneous native Bragg regions and profiles (2026-10-09)
+
+Use `partition_native_region_support` to assign each positive-membership native
+pixel to the first declared observation group. Preserve fractional weights and
+full within-group covariance; rebuild raw counts, areas and validity after the
+partition. Additional profiles may contribute only their unassigned pixels.
+Reserve training, selection and audit controls before adding profile support.
+Whole original display profiles may remain diagnostic rows, excluded from the
+likelihood. Partial-bin additions are not whole new measurements.
+
+`NativeLinearBackgroundProblem` jointly profiles one nonnegative physical scale
+and a caller-supplied nonnegative linear background design against raw-count GLS.
+For a nonincreasing radial field, multiply the integrated knot basis by the
+upper-triangular cumulative-sum matrix; nonnegative coefficients then represent
+successive density drops. The solver checks normalized NNLS optimality and
+reports conditional design rank. This does not establish joint physical
+identifiability or background adequacy. Independent backgrounds per peak and
+unpropagated double counting are not introduced.
+
+For the newer Bi2Se3 5-degree acquisition, the prepared operator retains 997
+previous signal rows (979 image cells and 18 profile bins), adds 464 partial
+profile bins, and includes 131 disjoint training controls: 1592 training rows.
+Selection and audit retain 39 and 71 nonempty controls. Original indexed Bragg
+regions must remain separate even when adjacent masks touch; connected components
+merged 18 original regions into 13 and are not suitable preservation groups.
+Freeze separate 003/006 checks before any continuation. Audit controls must not
+select candidates; their previously inspected-image status remains explicit.
+
+No new fit completed. Starting from the saved family-fit parameters, the current
+resolved specular rule exceeded its 4194304-node limit. The supported nominal
+importance rule failed inverse-CDF qualification. Its width-only termination was
+inconsistent with the caller's unchanged 2e-15 CDF threshold; importance inversion
+now requires that threshold explicitly. A retry still could not resolve a
+quantile: residual -2.1094237467877974e-15 within an angular bracket of
+8.881784197001252e-16 radians. The error stays explicit, with no clipping or
+relaxed tolerance. Analytic scalar checks establish the stopping-rule repair,
+not detector integration accuracy.
+
+All three physical predictions failed before a complete baseline; no optimizer
+was entered, no candidate objective exists, and the previous nominal fit remains
+unchanged and physically unadopted. The finite attempt is closed. A continuation
+requires a concrete numerical repair, a supervised caller binding inputs and the
+complete numerical rule, failed-attempt accounting, and fixed preservation and
+accuracy gates. Do not automatically increase numerical budgets or reuse the
+unexecuted archived optimization branch as a qualified fit workflow.
+
+The external `bi2se3_newer5_hybrid_attempt.ra_diag.npz` in the October 9
+`01a11e7a-43d2-7b23-a889-d369a898d3a1` visualization directory retains the prepared
+operator, covariance, original region identities, unchanged state, source bytes,
+checks and failure manifest. `Bi2Se3_newer5_hybrid_support.png`/`.pdf` show the
+previous nominal curves and exact detector support; they are not a new fit.

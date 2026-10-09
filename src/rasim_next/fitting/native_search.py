@@ -13,10 +13,13 @@ from scipy.linalg import cho_solve, cholesky, solve_triangular
 from scipy.optimize import OptimizeResult, least_squares, minimize
 
 from rasim_next.core.contracts import canonical_revision_sha256
+from rasim_next.fitting.native_background import NativeLinearBackgroundProblem
 from rasim_next.fitting.native_observations import NativeFitObservations
 
 if TYPE_CHECKING:
-    from rasim_next.fitting.native_background import NativeBackgroundProblem
+    from rasim_next.fitting.native_background import (
+        NativeBackgroundProblem,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,7 +117,7 @@ def score_native_prediction(
     *,
     guarded=False,
     literal_scale=None,
-    background_problem: NativeBackgroundProblem | None = None,
+    background_problem: NativeBackgroundProblem | NativeLinearBackgroundProblem | None = None,
     mixture_parameter: str | None = None,
 ):
     """Score a full physical vector with conditional scale/background/mixture once.
@@ -124,6 +127,12 @@ def score_native_prediction(
     A zero exposure retains the supplied coordinate solely as provenance and
     reports it unidentified; no fitted fraction is fabricated.
     """
+    if (
+        background_problem is not None
+        and mixture_parameter is not None
+        and isinstance(background_problem, NativeLinearBackgroundProblem)
+    ):
+        raise ValueError("linear background does not profile mosaic mixtures")
     values, raw = np.array(values, dtype=float, copy=True), np.asarray(raw)
     names = tuple(p.name for p in parameters)
     lower, upper = np.array([(p.lower, p.upper) for p in parameters]).T
@@ -332,7 +341,7 @@ def fit_native_parameters(
     finite_difference_step: float = 1e-4,
     enforce_historical_guards: bool = False,
     callback=None,
-    background_problem: NativeBackgroundProblem | None = None,
+    background_problem: NativeBackgroundProblem | NativeLinearBackgroundProblem | None = None,
     mixture_parameter: str | None = None,
 ):
     """Refit every unfixed coordinate and scale from each supplied start.
@@ -348,12 +357,18 @@ def fit_native_parameters(
     Its function budget excludes derivative probes, which evaluation_count includes.
     Callbacks must not change the predictor state within a precomputed batch.
     """
+    if (
+        background_problem is not None
+        and mixture_parameter is not None
+        and isinstance(background_problem, NativeLinearBackgroundProblem)
+    ):
+        raise ValueError("linear background does not profile mosaic mixtures")
     if background_problem is not None and (
         observations.objective_kind != "gls"
         or observations.exposure_index is not None
         or observations.allow_guard_constraints
         or enforce_historical_guards
-        or background_problem.ownership.shape[0] != len(observations.net_count)
+        or background_problem.observation_count != len(observations.net_count)
     ):
         raise ValueError("background profiling requires single-exposure raw GLS without guards")
     if predict_many is not None and not callable(predict_many):
