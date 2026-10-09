@@ -226,6 +226,14 @@ module-global or import-time side effects.
 
 ## Invalidation boundaries
 
+The desktop shell's exclusion editor uses `interactive/mask_state.py` for source-bound immutable
+native spans, compact session history and worker preparation. `project_state.py` persists the
+mask in schema 6; `slate_app.py` owns acquisition/revision admission through the existing job and
+atomic-write owners. `detector_panel.py` owns one exact profile reducer and a retained R8 reason
+texture alongside the unchanged counts texture. Visibility is presentation state. A real edit
+invalidates dependent profile caches; cursor and display changes reuse committed immutable state.
+No numerical package import depends on these optional Qt modules.
+
 - Source line, probability, correlation, or phase-space changes rebuild source rows and incident
   transport. Detector-path medium, scalar coefficient, or exact-wavelength table changes rebuild
   every detector evaluator while leaving sample geometry unchanged.
@@ -326,3 +334,289 @@ its required physical endpoint chart. Reflectivity owns its named overlap measur
 native search/accuracy retain covariance, guards and qualification. Migration is
 explicit in [ENGINE_MIGRATION.md](ENGINE_MIGRATION.md). No new dependency or permanent
 assessment harness is introduced.
+
+## Independent desktop simulation binding
+
+`interactive/simulation_state` owns immutable full configured drafts and external exact-result
+references; schema 9 project view state persists them independently of acquisition metadata.
+`simulation_fields` contains explicit UI descriptors, `simulation_panel` owns the controls and
+inspection bindings, and `simulation_io` delegates equations to existing configured/detector
+owners. One global `job_lifecycle` worker owns construction, sampler advance/reset/release,
+profile reductions and file publication. Its one replaceable publication slot carries owned
+immutable frames. No new physics or fitting owner is introduced.
+
+The visualization extra uses `threadpoolctl` to bound nested BLAS threads during worker execution.
+Display preparation uses worker-owned float32 copies; quantitative inspection uses immutable
+float64 snapshots. CPU/GPU reservations include retained application data. Reservations and
+software binding fidelity do not establish numerical convergence or responsiveness acceptance;
+see the current Task06 disposition in `DESKTOP_UI_PLAN.md`.
+
+
+### Desktop hBN owner boundary
+
+`fitting.hbn.prepare_hbn_ring_observations` owns existing discovery and preliminary refinement;
+`fit_hbn_ring_observations` fits an already reviewed immutable observation owner. The automatic
+convenience function keeps its previous defaults and composes preparation as before. The residual,
+curve, angle and qualification equations remain authoritative in this module. Admitted five-coordinate
+seeds/bounds and cooperative residual/boundary cancellation are explicit. Solver termination fields
+are separate from the retained qualification verdict and covariance/rank checks.
+
+`interactive/hbn_state.py` bounds immutable JSON input snapshots, review decisions, frozen packs and
+result records. `hbn_io.py` verifies exact source bytes and performs worker-owned OSC admission,
+preparation, Gaussian proposals, frozen fitting, canonical result validation and external export.
+`hbn_panel.py` presents these states and records bounded draft edits; `ShellWindow` routes requests
+through the existing single latest-only worker. No widget implements scattering/geometry equations.
+The optional narrow `fitting.spot` owner fits only the declared local elliptical Gaussian; it does
+not qualify a geometric beam intercept. Selected hBN distance remains calibrant-private.
+
+
+### Desktop sample-series owner boundary
+
+`selection.osc_series.index_osc_geometry_series` remains the sole OSC discovery/indexing owner.
+Optional complete-roster native counts/masks/revisions and cooperative checkpoints let the desktop
+bind already admitted data. Explicit masks intersect the existing all-zero edge validity. Absent
+optional arguments, canonical automatic inputs/defaults are retained. The existing confident-track
+owner admits reviewed decisions; original candidate coordinates and covariance remain immutable.
+
+`fitting.indexed_series.fit_indexed_geometry_series` consumes exact frozen `IndexedGeometryImage`
+blocks and existing corrections/bounds/scopes/gauges. Its optional checkpoints add progress/stop
+boundaries without changing equations/defaults or qualification. No desktop Fit calls the broader
+CLI indexing/multistart/audit orchestration.
+
+`interactive/sample_state.py` owns bounded immutable inputs, controls, review, frozen observations
+and result history. `sample_io.py` binds canonical geometry/material, owner calls, record validation
+and external exports on the global worker; `sample_panel.py` owns explicit draft/selection and
+result-ID presentation. Schema 12 persists exact losslessly packed JSON; expanded bytes participate
+in memory admission. Project Open admits saved structure and recorded qualification through canonical validators,
+then checks live source readiness separately. Missing or changed historical sample files retain
+inert inspectable history; matching live files still undergo the full prediction/residual validator
+without solving. Explicit revalidation restores readiness after exact original bytes return. All
+current/historical inputs and exported paths participate in project destination protection. The
+widgets contain no physical equations, and sample-only operation needs no hBN state. Selection
+never changes experiment geometry or supplies absent downstream qualification.
+
+
+The hBN solver and desktop record admission share `hbn_calibration_is_qualified`,
+`hbn_ring_residual_statistics` and `hbn_active_bounds` in `fitting.hbn`. These extract existing
+rules without changing physical equations, thresholds, solver defaults or covariance/rank work.
+Saved-record admission recomputes derivable diagnostics without optimizing. The hBN panel compares
+visible review with committed decisions before launch; only explicit commit/freeze changes the
+observation authority. Displayed point rows retain one result UUID and immutable record snapshot;
+choice changes clear prior curves/points before explicit worker presentation. Inspection and
+selection remain separate. No new controller, dependency or physical implementation is added.
+
+
+### Desktop joint geometry mechanisms
+
+`interactive/joint_state.py` owns immutable independent hBN/Bi2Se3/Bi2Te3 captures, canonical
+controls, bounded pending drafts and historical result snapshots. `joint_io.py` binds the existing
+frozen owners, calls `fit_joint_geometry` and publishes exact results and supported hash-bound
+handoffs on the existing global worker. `joint_panel.py` provides explicit capture/commit/selection,
+canonical-name comparison and record/image-bound native plots. No new scientific model or material
+alias is introduced; optional PbI2 capture remains unsupported in this UI.
+
+The joint fitting owner accepts optional explicit starts and phase/residual checkpoints while
+retaining defaults, reduced gauge, equations and numerical qualification. `joint_geometry_report.py`
+extracts the existing CLI report and qualification-failure rule for shared desktop use. Recorded
+admission checks canonical roles, fixed/unobserved references, metrics, conditioning and verdicts
+without fitting or computing a Jacobian. Handoff admission uses the same recorded-check validator.
+
+Schema 13 retains schemas 1-12. Independent packed captures/history and pending visible controls
+remain under the 1 MiB project cap and expanded-memory admission. Historical result presentation
+requires recorded structure; live file hashes and frozen provenance are checked only when fitting
+or verifying a handoff. A selected candidate is tied to the current committed launch; changed
+source/metadata/masks revoke that selection. Joint handoffs remain separate from indexed result
+adoption and grant GEOMETRY_ONLY, not downstream mosaic/intensity qualification.
+
+
+## Desktop physical editing (U09/U05d/U13)
+
+`physical_panel.py` connects constrained scene gestures, exact typed starts and fine adjustment
+to the existing configured simulator, acquisition NumericDraft, hBN, indexed sample and joint
+controls. It uses SessionHistory, explicit route adapters in `physical_io.py`, and the shell's
+single admitted worker. No physical gesture starts an optimizer. Nonspatial/unsupported values
+remain in their existing inspectors; absent and reduced-gauge coordinates remain readonly.
+
+Configured detector edits compile the instrument through the configured owner; the angle-only
+reuse function cannot admit them. Canonical indexed transport and the scene share
+`corrected_goniometer_axis`. `hbn_detector_transform` embeds the existing private hBN ring plane
+for visualization. The crystal detector distance and hBN private distance remain distinct.
+The scene converts incident vectors from sample to LAB and retains actual configured source origin.
+Geometry without a matching image draws a labeled schematic rather than requiring a texture.
+
+Geometry-derived centers read matching genuine saved hBN or supported sample results, preserve
+qualification, and record result/observation/input hashes. Explicit adoption updates initial values
+and provenance with one history transaction. It never adds observations. Physical preview and
+sensitivity jobs are bounded geometry calculations and do not consume joint handoff exports.
+
+
+### Desktop comparison and reviewed copy dispatch
+
+Comparison presenters retain one authoritative shared raw-count contrast tuple and acquisition/
+source-bound independent tuples. Replacement admission reapplies shared limits, including pending
+retained views; export requires current settled inputs. Persistence stores each current independent
+view plus the shared tuple, so unlock after Open restores the correct occupants' limits.
+Confirmed source-copy plans retain the setup context through deferred dispatch. The existing
+pending-request/context gate rejects obsolete confirmation before starting the copy worker.
+
+
+### Joint handoff predecessor ownership
+
+New desktop handoffs use the displayed immutable result's frozen launch captures. The worker
+checks all original hBN/crystal file identities, specimen/base paths and ordered image/command
+angles before publishing either sidecar. The existing owner builds the same v1 document from
+immutable report/configuration/manifest reads and checks captured hashes. The desktop rechecks
+live predecessors before no-overwrite publication, removes only its own unchanged new files
+on paired publication failure, and hashes serialized bytes for export references.
+
+Historical reports without a launch remain inspectable and exactly exportable; new desktop
+handoff creation is unavailable. Existing handoff verification retains its serialized byte-binding
+guarantee and cannot reconstruct missing original fit lineage. Qualification and geometry rebasing
+still belong to the existing core; no joint handoff becomes an indexed result implicitly.
+
+
+### Prepared native inspection and draft editing (R3)
+
+`native_fit_io.py` reads existing physics/observation/plan inputs through the typed native owners
+and validates original physical/raw-acquisition/projection/NPZ bindings. JSON size, NPZ expansion,
+4096 profile rows, the existing 160 MiB result cap and shared CPU/GPU admission bound file work.
+One global worker performs reads and structural search checks with one BLAS thread. No observation
+preparation, prediction, optimizer, indexed adoption or protected-script integration is connected.
+
+`native_fit_state.py` retains bounded immutable draft descriptions, original file identities,
+full plans and engine/model/parameter-definition digests. `native_fit_panel.py` derives parameter
+rows from the current plan and actual model names/units/owners. It edits starts, declared search
+bounds and present supported method/budget/difference-step fields. Physical bounds, units, owners,
+fixed/released scopes, stage order and unknown settings stay explicit declarations. Fixed starts
+remain equal in every start. Unsupported rows and methods are inert and visibly unavailable.
+
+Schema 15 preserves schemas 1-14 and stores descriptions/history/pending text edits/export
+references, never large count/covariance arrays. Prospective admission, ordinary autosave and
+Save/Open remain the shell's responsibility. The existing SessionHistory holds immutable snapshots
+and charges changed descriptions; unchanged historical strings are reused. Compatible historical
+starts transfer only through explicit review by owner/name identity. Incompatible definitions stay
+readable and require an authoritative new plan; no migration/default/parameter registry is added.
+
+
+### Portable desktop archives (R7a)
+
+`archive_panel.py` reviews explicit delivered-product selections. `archive_io.py` inventories
+current/historical dependencies, streams exact files and imports a new external directory on
+the shared worker. Retained simulation metadata supplies original result inputs independently
+of the current draft. Project state owns masks, calibration, ROI, comparison, physical settings,
+parameter definitions/history and pending edits; large arrays remain external.
+
+The v1 manifest records original paths, safe relative names, sizes, SHA256 and original
+qualification. `project-original.slate.json` contains the exact serialized logical snapshot
+reviewed for the selection, rather than claiming the digest of an earlier Save file. Import
+retains it and writes distinct `reopened.slate.json` bytes with schema 16's bounded explicit
+`archive_storage_json`. Acquisition paths and result locations move; immutable scientific
+descriptions retain original paths/hashes. Narrow mappings at existing configured, prepared
+and joint typed I/O owners resolve config-relative CIF and observations-relative NPZ.
+Repeated acquisition archiving preserves ancestor provenance when raw hashes agree.
+
+Archive access grants portable inspection, never scientific execution/adoption/qualification.
+Archived sample Open runs unchanged retained structural/identity validators and reports live
+geometry revalidation unavailable. The existing active-use/export prediction validator remains
+unchanged. No solver, new controller, plugin registry or protected-script hook is added.
+
+
+### Desktop attempts, duplication and recovery (R7b)
+
+`attempt_state.py` is bounded display/inspection metadata alongside existing immutable owners.
+Schema 17 adds `attempts_json`; schemas 1-16 read with empty metadata. Prepared rows retain the
+exact description and definition SHA256, session identity and pending text; result rows retain
+the original session UUID/result UUID and complete record. Simulation rows use draft UUID and
+semantic draft identity or exact result NPZ SHA256. Top-level storage paths are excluded from
+draft attempt identity, so explicit storage relocation preserves names; all scientific values,
+units, imported hashes, revision and provenance remain in that identity. Exact paths remain
+visible in the complete stored description. There is no new scientific history owner.
+
+`project_tools_panel.py` presents stable rows and uses the existing bounded `SessionHistory`
+for reversible metadata edits. Duplicate review creates a new project UUID and records the
+source project UUID as inherited inspection. Scientific owner/result IDs are retained, not
+rebased. Persistence/reopen materializes independent immutable project values; mutable GUI
+history, pending actions and recovery ownership are reset. Exact predecessor files can be
+shared through the existing explicit storage map. Simulation catalogs are bounded to eight
+references per route and participate in project admission, resource charges, protected-path
+checks and archive inventory/relocation. No hidden eviction changes history.
+
+`project_tools_io.py` performs bounded recovery review and exclusive duplicate publication
+through the existing global worker, generation/context checks, queue, cancellation and drain.
+Reviewed Open hashes and parses the same bounded bytes. Recovery review admits at most 32
+UUID-named 1 MiB documents and reports UUID/source identity, observed age and malformed choices.
+The existing atomic JSON publisher accepts an optional no-overwrite mode and prepublication
+cancel check. Recovery replacement/cleanup uses exact owned receipt hashes; queued saves bind
+to the newest preceding owned receipt at dispatch. Unknown/changed recovery files are retained.
+These checks preserve a previous valid file before commit, without claiming cross-process
+locking, filesystem-wide atomicity or power-loss durability. Existing physical/qualification
+validators and explicit definition-compatibility gates remain authoritative.
+
+
+### Acquisition review and historical frozen inspection (R6)
+
+`preparation_state.py` owns bounded review metadata; `preparation_io.py` performs read-only
+OSC/reference identity checks; `preparation_panel.py` routes immutable output identities
+to the existing prepared inspector/editor. Schema 18 reads schemas 1-17 with empty review
+state. The shell uses its existing worker, resource admission, queued cancellation,
+generation/context checks and Close/Open drain. No numerical preparation owner or second
+worker is added. Receipts preserve explicit native masks/calibration revisions and hashes
+of delivered geometry owners, rather than silently adopting their values.
+
+| Scope | Existing authoritative owner | Available evidence and current limit |
+| --- | --- | --- |
+| New raw acquisition | No complete recipe in the current native workflow | Requires a declared fixed signal/control membership, calibrated background transfer and full shared covariance with independent qualification. Projectors alone do not supply these decisions. Numerical Prepare unavailable. |
+| Frozen observation adoption | `scripts/prepare_native.py:prepare` | Existing frozen projection integrates declared raw/variance; measured rows require exact equality, covariance rtol 1e-12/atol 1e-8, signed net atol 1e-8. Background already owns any dark subtraction. These are verification tolerances, not evidence of new background truth. The unchanged script has no independently admitted cooperative desktop execution/publication boundary. |
+| Frozen catalog selection | `prepare_native.py:prepare_catalog`, `configs/native_experiments.json` | b4, bi2se3, bi2te3, clean1, gd1, sid1 reference exact existing observation/physics bytes. The historical Bi2Te3 baseline is nominal and numerically unqualified. Selection supplies no new-acquisition recipe or desktop execution boundary. |
+| Fixed native pixel membership | `measurement/continuous_regions.py`, `region_observations.py`, `angle_space.py` | Explicit projector primitives preserve native membership and shared count covariance; their caller must supply calibrated observables, fields/variance and background transfer. No new numerical evaluation performed for R6. |
+| Geometric ring observations | `fitting/hbn.py:prepare_hbn_ring_observations` / existing hBN desktop owner | Narrow geometric calibrant route. Its genuine retained qualification remains with hBN; it does not define native ordered-intensity background preparation. |
+| Frozen typed inspection and plan editing | `fitting/native_observations.py`, existing `native_fit_io.py` / `native_fit_panel.py` | Reads exact genuine frozen rows, signed counts and full count covariance plus background-modes covariance. R6 extends historical inspection without replacing definitions or pending edits. Current geometry is not reprojected. Draft routing does not connect fitting execution. |
+
+The optional geometry-bound adoption script path replays exact-tag geometry predictions;
+it is not exercised here. Protected preparation/refinement scripts and the parked Task12
+integration remain untouched. Review notes, stored manifests and unknown metadata are
+inert evidence, never executable requests. No parameter defaults, background assumptions,
+row reordering, normalization, diagonal covariance substitution or new qualification is
+introduced. Immutable observation bytes bind the complete metadata displayed by inspection.
+
+Review receipts participate in existing archive inventory and destination protection.
+Original paths remain immutable evidence while explicit storage relocation supplies bytes.
+Large observation arrays remain external and load only for explicit typed inspection.
+U11e/U11f numerical preparation and U11g end-to-end stage readiness remain unsupported;
+R6 delivers independent review/inspection/draft mechanisms. Acceptance belongs to the
+roadmap owner and is not inferred from these software checks.
+
+
+### Declared native stages and independent controls (R5)
+
+The existing NativeFitSession and native_fit_panel own stage selection and bounded
+pending active-list/guard proposals. native_fit_state.stage_review presents named
+canonical identities, upstream declarations and frozen inputs without creating
+candidates. native_fit_io reuses native_search.validate_native_search_request for
+non-solving commit validation, including unique stage names, actual boolean guards,
+fixed-active consistency and final free-coordinate order. Unsupported definitions
+stay inert/read-only. No execution/adoption responsibilities move out of protected
+scripts. Schema 19 adds optional selected_stage within the existing session; schemas
+1-18 remain readable. The shell accounts for stage-review text in existing resource
+admission and reuses its one worker/generation/history/persistence lifecycle.
+
+| Scientific scope | Authoritative coordinates/owner | Independent UI coverage and limit |
+| --- | --- | --- |
+| Bi ordered cell/site | BiJointModel: first 13 cell/site/occupancy/ADP coordinates | Existing R3 canonical parameter controls plus R5 role/identity review; original units/bounds/scales only. |
+| Bi mosaic | BiJointModel: gaussian_sigma_rad, lorentzian_half_width_rad, lorentzian_probability | Existing method/budget controls plus earlier-stage active JSON proposals and declared guard choices; no stage template or solve. |
+| Bi morphology | BiJointModel: two conditional surface fractions, extra thickness and two roughness coordinates | Same editor; thickness derives from N*c plus extra thickness, fractions from existing conditional shares. No derived values recomputed. |
+| Bi native disorder | No native Bi disorder coordinates; fault_parameters is empty | Unavailable; a named stage cannot create this capability. |
+| Pb ordered/mosaic/morphology/disorder | PbJointModel: first nine cell/site/ADP, three mosaic, two surface shares, extra thickness, initial plus probability and actual phase-share/epsilon/parent-share roster | Actual loaded definition only. Derived conditional fractions and inactive directions remain owner calculations. Inventory is source-supported; no new measured Pb native stage qualification. |
+| Native instrument | NativeInstrumentBinding: optional 18 named canonical coordinates, acquisition SHA owner | Existing canonical unit/order/domain controls; no fabricated parameter roster. |
+| Scale/background | native_search profiles nonnegative acquisition scale; guarded SLSQP owns its literal scale; native observations own background/full covariance | No separate editable nuisance definitions or background recipe exist. Exact declarations displayed. |
+| Native stage outcomes | scripts/refine_native.py writes result; scripts/render_native.py consumes it while constructing/evaluating a predictor | Independent typed read-only result boundary missing. No relocated importer/hooks or numerical diagnostic reconstruction. |
+
+Declared parameter index and actual canonical index are distinct and mapped by
+(owner, name, unit). Final stage order and global fixed/gauge definitions stay
+read-only; earlier active lists are structurally checked proposals. Script stage
+warm-start selection remains script-only and is shown as a policy, not a generated
+upstream candidate. Exact declarations and unknown fields survive existing immutable
+history and archive storage relocation. Genuine hBN/joint diagnostics retain their
+original typed owners and qualification; they are upstream geometric results, not
+native mosaic/ordered/disorder stage outcomes. Full U11a/b/c dispatch depends on R4
+and original-condition acceptance remains with the roadmap owner.

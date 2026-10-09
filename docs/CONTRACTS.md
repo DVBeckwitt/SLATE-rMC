@@ -86,6 +86,96 @@ whose lifetime ends at the sampler's next operation and which is never retained 
 - Invalid rows have explicit status and cannot carry fabricated nonzero intensity.
 - IDs prove alignment and provenance; they are not numerical weights or sorting keys.
 
+## Desktop native exclusions (U04/U04a)
+
+`interactive/mask_state.py` owns immutable `NativeMask` state: decoded OSC SHA-256, native
+`(rows, columns)` shape, monotonic signed-64-bit revision, sorted disjoint half-open row spans
+and bounded provenance. Reason zero includes; reasons 1–4 annotate user exclusion, beamstop,
+detector gap and saturation. Adjacent equal-reason spans are canonicalized. Acquisition UUID
+ownership is supplied by the project; an identical source in another acquisition has independent
+mask/history state. Original counts and source bytes are never edited.
+
+Rectangle membership includes native pixel centers inside its bounds; polygon uses even-odd
+crossings with half-open edges; brush is the union of closed native-radius capsules. Boolean
+C-order `.npy` import requires exact native shape, uses True to retain existing membership and
+False to assign the chosen nonzero reason, and records the imported bytes' SHA-256. No OSC
+orientation conversion or inferred saturation rule is applied by this boundary.
+
+The existing `exact_band_profiles` reducer owns masked sums, means and valid-pixel support.
+Exclusions and nonfinite samples contribute neither signal nor support. Signed counts remain
+signed; zero support is missing (sum zero, mean NaN). Display visibility cannot change these
+values. Full-image reductions share one valid/safe plane; narrow reductions keep their declared
+band/ROI bounds. Published native arrays, reason planes, inclusion and profile snapshots are
+read-only. History checkpoints are compact immutable span arrays; undo/redo advances revision.
+
+The desktop job identity binds project/acquisition UUID, data and mask revisions plus the global
+generation. Publication also checks the current source, base mask and pending edit prefix.
+Mask changes invalidate the panel's full/ROI/query caches; reasons, inclusion and exact profiles
+are published together for the matching acquisition. Prior arrays survive unchanged. Preparation
+keeps prior values explicitly labeled; exported inspection metadata names the mask revision and
+provenance. Future observation/result binding must consume a frozen mask identity; this UI slice
+does not create or modify those scientific products.
+
+Mask state is persisted in desktop schema 6 through the existing bounded atomic writer. Schema
+1–5 reads default to no exclusions. Runtime limits and user interaction are documented in
+[interactive/README.md](../interactive/README.md#native-exclusion-editing); these desktop contracts
+do not change the numerical package API version or qualify a physical fit.
+
+## Desktop hBN qualification, review and inspection consistency
+
+Saved hBN records must agree with the existing `fitting.hbn` qualification predicate: solver
+success, rank five, scaled condition below 1e8, no active bounds, each of five ring counts at least
+eight, each angular coverage at least 0.15, and maximum ring RMS at most 2.5 px. These are existing
+thresholds. The solver and admission use one shared rule and shared residual/support/contact
+statistics. Recorded values must obey original admitted seeds/bounds/units and native ring/sector
+support. Import/Open checks derivable counts, coverage, ring/aggregate residuals and contacts against
+the exact pack and canonical residual owner without refitting or calculating a new Jacobian.
+Contradictory flags/statistics fail before publication; genuine unqualified records and unavailable
+uncertainty stay honest. Unknown condition cannot support a qualified claim.
+
+Pending visible hBN inclusion/reason edits block Fit before dispatch. Commit invalidates dependent
+frozen readiness/selection, and explicit freeze retains discovered coordinates and identities.
+Restore/undo-to-committed decisions restores corresponding readiness; displayed edits cannot be
+silently reset by Show draft/control/history actions. Save/autosave/Open persists committed state.
+Readonly result points carry `(result_id,row)` and use one immutable displayed record for inspection.
+Changing the combo choice clears previous table/curves/overlays until explicit worker presentation;
+result removal/reopen respects the same identity. Inspection never implies selection or geometry
+adoption. These desktop corrections supply no new scientific/performance qualification.
+
+## Desktop reviewed sample geometry (U05c/U08c/U10a)
+
+A bounded sample session admits the complete 2-8-image manifest with hash-bound configuration/CIF,
+raw OSC and decoded source identities, native shapes, commanded angles and per-image fitting masks.
+Canonical discovery/indexing intersects user masks with its existing all-zero edge validity. Review
+may exclude discovered observations with reasons; it cannot invent positions/reflections or relax
+confident-track admission. A frozen pack retains exact native coordinates, covariance, wavelength,
+rod/branch/track/image identities, ordering, source/mask revisions and review/hash provenance.
+
+Fit calls the existing indexed-series owner with those frozen observations and no reindexing. The
+launch snapshot contains actual shared/calibration correction seeds/bounds/fixed scopes, common delta,
+complete zero-sum Helmert contrasts/prior and fixed solver defaults. Degrees convert once to radians;
+metres and native pixels retain their named units. The existing delta/sample-normal-x gauge and
+owner constraints apply. Pending visible edits block work until committed; input/mask/review edits
+invalidate readiness. One global worker owns execution; cancellation clears obsolete pending work,
+checks phase/residual boundaries and rejects late/stale publication. No GUI-thread solver join or
+forced termination is introduced.
+
+All point/table/inspection/plot bindings refer to one immutable result ID. Solver termination remains
+separate from rank, conditioning, bound contacts and scientific qualification. Sample-only candidates
+retain dataset/precision/downstream flags false when root/outer/heldout audits are absent. Existing
+scaled singular/weak-direction diagnostics are retained; calibrated covariance/standard errors remain
+unavailable. Explicit selection grants inspection, with no experiment-geometry mutation or downstream
+admission. Import/Open reconstruct the existing result dataclass predicate and canonical coordinates,
+residuals/metrics without fitting; a self-consistent hash alone is insufficient.
+
+Desktop schema 12 adds the session while retaining schemas 1-11. Four results, 16 export references,
+512 reasoned exclusions and per-document expansion caps supplement the unchanged prospective 1 MiB
+project cap. Prepared/frozen/result JSON is losslessly packed with bounded strict expansion; logical
+memory reservations include expanded data. Exact result/observation JSON and PNG/value exports require
+new external destinations. Project writes protect all retained current/historical input and export
+paths. Missing/changed historical sources cause explicit validation failure; general recovery and
+scientific/performance acceptance are separate work.
+
 ## Stable core data contracts
 
 | Contract | Owner | Essential payload |
@@ -1032,3 +1122,295 @@ The conditional stream may omit the local composite with explicit
 original combined group/source count for the regular per-panel absolute
 error allowance. Default full-detector behavior and physical populations
 remain unchanged; a rod-subset detector has its own subset allowance.
+
+## Desktop joint geometry (U08d/U10b)
+
+The supported capture roster is exactly frozen hBN plus Bi2Se3 and Bi2Te3. Captures retain their
+original source/config/CIF hashes, native coordinates, mask revisions, rod/branch/track identities
+and review exclusions. Replacing a group is explicit; opening another sample editor never replaces
+an earlier capture. Missing groups or unsupported materials block Fit. A genuine retained hBN
+calibration candidate is the current owner's seed input; it need not be successful or newly fitted.
+
+Controls use the canonical 21-coordinate order and units. Unchanged displayed values retain their
+exact stored floats. Reduced-gauge references and absent PbI2 coordinates remain zero and readonly;
+adjustable starts are never silently overwritten. Bounds are strictly ordered, starts are finite
+and within bounds, and private hBN distance stays positive. The owner keeps existing solver,
+conditioning, covariance and scientific qualification work. Cancellation is cooperative at phase,
+residual, qualification and per-image boundaries; one existing worker handles all jobs.
+
+Joint report import checks recorded structure/roles, rank/condition, bound/confidence consistency,
+per-image/pooled metrics and the existing qualification verdict. Current-launch records additionally
+bind exact frozen observations, initial/bound vectors and saved site/ring diagnostics. No import
+recalculates a fit or Jacobian. Historical reports without desktop launch lineage cannot claim
+starting values, frozen coordinates or current selection, and their views do not require live files.
+
+Schema 13 persists bounded captures, controls, pending edits, four immutable results and 16 protected
+file references. Strict bounded lossless expansion supplements the unchanged 1 MiB prospective
+project limit. Expanded data participates in shared memory admission. Qualified joint handoff
+save/reload uses the existing owner, verifies actual predecessor bytes and rebases once; it remains
+GEOMETRY_ONLY. Import/export/selection never reinterpret it as an indexed fit or adopt it implicitly.
+
+
+## Desktop physical editing and sensitivity (schema 14)
+
+Schema 14 accepts earlier project schemas and adds at most 16 KiB of sensitivity request settings:
+route, canonical parameter, stored unit, positive finite step, baseline hash, affected images and
+observable. Transient previews are not persisted or selected as fits. Sample initial-estimate
+provenance is a bounded optional JSON object; earlier sessions default to empty provenance.
+Provenance does not change frozen observations, fit equations or the launch objective.
+
+Detector intrinsic column/row tilts in configured drafts use configuration degrees and the
+canonical compiler's radians internally. An absent optional detector_tilt pair defaults to zero
+without rewriting baseline YAML/hash. All fit starts retain the owner's radians/metres/native
+pixels, bounds, canonical order and active/fixed scope. Drag previews validate a complete rigid
+change; release commits one history action. Escape cancels. Camera navigation changes no starts.
+A hBN undo restores its original review revision with its corresponding frozen pack.
+
+Explicit sensitivity uses one selected coordinate and baseline/plus/minus, at most 4096 feature
+coordinates per view and 2 MiB per result, on the existing CPU worker with BLAS limited to one.
+Configured Q maps use the existing 13 by 13 native grid. Frozen site/ring identities and held-fixed
+values are exact; domain or branch/topology changes remain invalid and provide no derivative.
+Source spread is unobserved by nominal geometry and has no sensitivity control. Request/context
+identity guards reject obsolete queued work and late completions. Display textures and retained
+thumbnail memory participate in existing resource admission.
+
+Saved hBN proposals require genuine matching qualified calibration/input lineage. Sample proposals
+require a successful recorded geometry result with active detector-reference column/row calibration;
+standalone sample estimates remain explicitly unqualified. The direct-beam intercept, ellipse
+center and detector reference pixel are different quantities. Off-panel estimates are not clipped.
+Shared hBN adoption lists compatible targets and checks configuration/CIF, detector/beam settings
+and acquisition source/revision before prospective project admission and one transaction. It leaves
+each private distance and immutable result intact, clears affected readiness/selection and records
+source result/observation hashes. Sample adoption applies the actual coupled pose/calibration starts
+through their owner. Manual/direct-spot tooling remains available in its existing panel.
+
+Sensitivity is local feature motion, not confidence. Marginal standard errors, measurement covariance
+and parameter propagation remain distinct. No prediction bands are shown without a genuine qualified
+full covariance and supported observable mapping; hard bounds never supply uncertainty.
+
+
+## Desktop source relocation and historical sample recovery
+
+Relink preserves the saved reference-byte identity, including a configuration's dependent CIF.
+Any later reference hash must still match that identity. OSC raw/compression bytes remain distinct
+from the decoded OSC identity: decoded identity and raw-byte stability are checked before binding.
+A same-path successful revalidation refreshes source/reference readiness and selected-image
+admission without manufacturing a persistent edit or undo action. The original worker/review
+context still gates publication; changed bytes and stale receipts cannot mutate bindings.
+
+Sample saved-record admission checks the record/launch hashes, exact canonical review pack,
+typed discovery and result structure, recorded qualification flags, named scopes/bounds/trims,
+frozen observed points and finite residual shape/consistency. It does not claim live numerical
+validation when original files are unavailable. Missing/unreadable/different source bytes alone
+produce explicit transient unavailable readiness; malformed records or scientific/model validator
+failures still reject Open atomically. Qualified/unqualified states and historical values remain
+unchanged. No availability label grants downstream qualification.
+
+Current and historical input identities have separate bounded transient checks. Missing-live
+history stays inspectable; active selection/Fit is blocked until the matching current launch and
+live readiness are available. Full geometry/provenance/prediction/residual/metric checks remain
+mandatory on restored live record validation, import, export and supported active use. Explicit
+Revalidate saved source identities uses the existing admitted worker and context checks, without
+preparing observations or solving. Revalidation does not rewrite recorded inputs or fit outcomes.
+
+
+## Desktop comparison replacement and copy confirmation
+
+A locked comparison has one shared `(low, high, contrast mode)` in raw native counts. Independent
+limits bind both acquisition UUID and decoded source identity. Replacing either slot admits that
+image's own independent limits and reapplies the shared tuple. Pending/failed replacement retains
+the prior visible snapshot under shared limits and disables export; stale admission changes nothing.
+Changing contrast during incomplete replacement retains the authoritative shared tuple. Returning
+to the previous cached image preserves its independent limits, including unlock while pending.
+Save/Open preserves shared intent and current independent views; no units, normalization, mask,
+support or detector-coordinate transformation changes. Compatible navigation retains its own gate.
+
+A confirmed immutable copy plan carries the project UUID, revision, selected acquisition and exact
+target roster from review. Deferred dispatch compares that captured context before any worker
+launch or destination write. A mismatch discards the confirmation and requires review again. An
+unchanged context uses the existing no-overwrite, byte-verified copy and atomic binding path, with
+its original identity, dependent-CIF, cancellation and stale-publication checks.
+
+
+## Desktop joint handoff original predecessors
+
+Save handoff requires a retained immutable qualified result with an original captured launch.
+Requested Bi2Se3/Bi2Te3 manifest and detector-base paths must equal that result's paths. All
+captured manifest/configuration/CIF/OSC and hBN source/dark identities must still match. Ordered
+image IDs and commanded angles must equal the chosen result's capture; current captures never
+substitute for historical predecessors. Admission failure writes neither output and changes no
+export references. Paired publication collision/cancel removes only unchanged files created by
+that operation, preserving preexisting or changed destination bytes.
+
+The canonical document builder accepts immutable report bytes and optional expected predecessor
+hashes; configuration and manifest parsing use the bytes that supplied their hashes. The format
+and GEOMETRY_ONLY status are unchanged. Later file changes cannot become bound predecessors
+silently: reload rejects serialized identity mismatch. There is no filesystem-wide lock or atomic
+two-file rename guarantee. Historical launch=None records retain exact inspection/export and
+existing handoff verification. The latter proves serialized byte bindings and the owner geometry
+contract, not reconstructed original fit ancestry.
+
+
+## Prepared draft descriptions (schema 15)
+
+Prepared inspection binds physics JSON, observations JSON, original plan JSON, numeric NPZ and
+raw-acquisition bytes. The typed owners verify projection revision, frozen corrected counts and
+full covariance. Profiles retain raw/background/signed corrected counts, validity and frozen
+`observation SHA256:row index` IDs in original order. The full count-plus-background covariance
+is retained externally in memory; displayed marginal standard errors never replace it. Arrays
+are bounded readonly copies and are not persisted in the project. Missing/changed original files
+leave descriptions inspectable and reload unavailable; wrong bindings reject before publication.
+
+Every current/history description has a digest over exact input identities, full ordered plan and
+parameter/model definition. Definitions record actual model names, canonical units/owners, source
+revision and loaded FitParameter declarations, including physical/search bound kinds. Displayed
+units equal canonical units. Added/removed coordinates, changed units/owners/domains/bounds/scales,
+fixed-state changes or engine/model revisions block old-start reuse. Pure reordering aligns by
+owner/name, never index. Authoritative loaded starts require explicit new-plan review; historical
+fields remain exact. At most eight old descriptions and sixteen export references are admitted.
+
+Pending edits retain stable identities and selected start index, including invalid text until
+commit/discard. Commit uses FitParameter and the existing non-solving search validator, preserving
+fixed values and final stage order. Physical bounds and active/fixed scopes cannot be silently
+released. Unavailable parameter/method metadata remains inert. This is structural draft checking,
+not full scientific domain/gauge/qualification or full engine launch admission. Run and indexed
+adoption remain unavailable pending R4; no equivalent route around the parked script patch exists.
+
+
+## Portable archives and exact exports (schema 16)
+
+Schemas 1-15 remain readable with empty storage. A versioned storage object is bounded to 128 KiB
+and 256 absolute original/stored path pairs with raw SHA256/size and archive identity. Expected
+predecessor hashes must agree; relocated bytes still pass existing owner checks. Original
+scientific bytes are never rewritten or assigned a derived document's digest. Compressed OSC
+archive members retain `.osc.gz` for the authoritative reader.
+
+Review displays selection, file identities/sizes/total, unavailable references and selected versus
+historical qualification. Export binds current document/selection/epoch across the file chooser
+and deferred dispatch. Sources are rehashed before copying, compared while streaming and rechecked
+before publication. Missing selected dependencies block self-contained export. Future unavailable
+R4-R6 products are separately labeled. Retained result input closure is distinct from current draft.
+
+Limits: 256 files,512 MiB per file, 2 GiB expanded data, 1 MiB project, 512 KiB manifest and shared 4 MiB
+requests. Existing CPU/resident-state admission and one worker bound file work. Disk admission
+adds bounded documents and 16 MiB margin. Import rejects unsafe/colliding Windows names, links,
+encryption, incomplete inventory, size/hash mismatch, unsupported version, contradictory
+qualification and inconsistent selection. Existing numeric/JSON formats never execute checkpoints.
+
+Archive publication uses a flushed/fsynced owned sibling temporary file and atomic no-overwrite
+hard link where supported. Import verifies an owned staging directory before Windows rename to
+a new destination. Unsupported filesystems can reject publication. There is no filesystem-wide
+lock or multi-file crash-recovery guarantee. Failure/cancel cleans only owned new staging paths.
+A completed directory may remain when later GUI context rejects its reference; it is neither
+silently adopted nor removed. Open separately applies ordinary dirty/pending-state handling.
+
+Prepared exact measured NPZ export contains raw/background/signed corrected counts, validity,
+frozen row IDs, marginal errors, full covariance and provenance without normalization/prediction.
+Reference undo/redo retains pending text. Existing figure exports retain paired numeric values.
+Configured figures still require reviewed new filenames in an existing external output directory
+through their owner; archive relocation does not rewrite the output declaration.
+
+
+## Desktop named attempts and independent recovery (schema 17)
+
+- `attempts_json` is `slate.attempts.v1`, at most 128 KiB inside the 1 MiB project. It holds
+  at most 128 display names, one optional stable inspection key, at most eight configured and
+  eight native result references, and an optional inherited source-project UUID.
+- Keys are `(route, owner UUID/definition SHA256, exact result UUID/description identity)`.
+  Simulation draft identities exclude only top-level storage paths; scientific declaration,
+  hashes, units, revision and provenance remain bound. Result identities use the NPZ SHA256.
+  A name/inspection change never rewrites the original record or grants qualification.
+- Prospective project admission checks catalog bounds before adopting an output. Historical
+  reference removal is explicit and never deletes external evidence. Archive selection filters
+  route catalogs; inventory includes retained snapshot input closure independently of current
+  drafts; relocation updates storage paths while preserving stable keys and scientific records.
+- A duplicate has a fresh project/recovery UUID and a reviewed new destination. Its historical
+  sessions, observation/result identities and parameter definitions retain original provenance
+  as inherited inspection. Current reuse/selection uses the existing owner validators. Exact
+  files can be explicitly shared; portable archive provides copied file storage.
+- Duplicate publication never overwrites a destination. Reviewed duplicate/recovery Open binds
+  raw SHA256 and parses those same bytes before replacing current state. Recovery candidates
+  must have matching UUID filenames in the configured root, with at most 32 drafts/32 MiB total.
+  Partial/malformed candidates cannot replace valid state. Missing/changed sources remain
+  explicit; only existing exact-identity Relink can establish a restored binding.
+- Recovery overwrite/retirement requires the exact owned/reviewed prior SHA256. A preceding
+  queued publication updates ownership before the next dispatch. Unknown/changed bytes are
+  preserved. Atomic publication checks cancellation before commit; after commit a complete
+  copy may remain, but obsolete work cannot adopt it. No solver resumes, and no filesystem-wide
+  transaction, concurrent-writer lock or power-loss guarantee is provided.
+- Inherited sample Open performs structural original-record validation and labels live
+  revalidation unavailable, as archived Open already does. Active selection/export keeps the
+  existing canonical geometry, physical, covariance/rank and qualification checks.
+
+
+## Compact Live Simulator dashboard
+
+The detector presents input match/history, presentation versus quantitative state,
+explicit recorded completion/progress, observable and qualification independently.
+Configured workers record execution completion only at their successful terminal return;
+older snapshots retain unknown completion. Completion never establishes convergence.
+The numerical color legend describes the actual shader limits, mode and active display
+aggregation. Display exposure changes limits only; clipping uses positive display cells.
+
+Inspection connects existing Hold/Follow, exact Profiles/ROI and exact export owners.
+Saved configured native-cell results can be reopened for comparison through the existing
+hashed-result reader. Compatibility requires the same declared measure, entire instrument
+geometry/frame/support and native shape; no alignment, rebinning or model/count residual
+admission is implied. Shared display-sum bins, mode and limits are explicit and fixed across comparison resize/zoom.
+Both panes reuse their worker-prepared sums at the same selected bin; Auto 99% uses only
+the displayed snapshot as one shared scale anchor. Manual/full-range controls affect both
+panes without normalization; exact native arrays and identities remain unchanged. Recorded-launch export uses
+the displayed frame's immutable declaration, including historical inputs, and invents no
+desktop Monte Carlo CLI equivalent. Native saved comparison without a bound geometry
+identity remains unavailable.
+
+Fitting preparation follows Inputs, Exclusions/counts, Geometry review, Model/stages and
+Results. Typed stage selection edits the same pending declaration as Advanced; parameter
+order, owner/unit/scope, fixed/gauge definitions, physical bounds and final-stage ordering
+remain authoritative. Native execution/results remain unavailable; complete covariance is
+retained by its existing owner. Review actions do not adopt new geometry into frozen inputs.
+
+The desktop Simulator defaults to the side-by-side Workspace with one primary Run
+action, adjacent Live and Stop visible during pending/running/timed or Live work.
+Project, Display and apparatus View menus reuse existing action owners. Exact saved
+image and Advanced have direct Alt+O/Alt+A routes. Common selected-device fields precede
+derived incidence and a one-click mosaic summary; Sample/Mosaic expands exact mosaic
+controls. One scrollable inspector keeps fields readable at compact/scaled sizes.
+The compact scientific line retains history, preview/quantitative, declared completion
+and qualification; full schemas/hashes/edge-bin/clipping details remain inspectable.
+Inspection disclosure allocates a resizable pane; short comparison headings keep exact
+frozen identities in Details and preserve B035 common-bin/limits/resource ownership. Quick controls write through the existing
+configured/native schema editors to the same immutable draft and bounded undo history.
+A slider drag commits on release; numeric text pauses coalesce after 300 ms. Exact
+numeric text is authoritative. Slider span and step are user navigation settings,
+not physical bounds; canonical constructors determine validity. Lorentzian probability
+retains its actual [0,1] domain. Other vector coordinates, axes/pivots and optional
+fields remain intact. Advanced retains complete schemas, routes and file/history/
+inspection/export/transfer actions.
+
+Incident-angle convenience applies only to a single +X active rotation with a +Y
+beam, identity zero/sample rotations and an angle in [-90,90] degrees. Otherwise the
+sidebar exposes declared axis angles. Worker admission derives signed mean-air-ray
+glancing incidence from the canonical LAB-to-SAMPLE vector transform; positive means
+toward the sample. This readout is neither a source-ensemble mean nor an internal-film
+angle. Native geometry uses its declared transforms; full rotations remain in Advanced.
+
+Live requests complete canonical validation then the existing Simulator Run. The
+existing global worker and one newest pending snapshot remain authoritative; project,
+epoch and generation reject obsolete publications. Stop, Live off, workspace exit,
+route changes, Open and Close cancel timers/requests and invalidate late continuation.
+First visits admit the existing starter and request one diffraction pattern through
+the canonical update worker, with Live off. Stop, leaving or Open consumes/cancels
+this startup request; repeated visits never restart it. Saved/imported/recovered
+projects retain exact settings and Live off. Show saved image reopens a bound snapshot
+by its exact hash; image-less drafts use Run without replacement by defaults. Validation failure does not retry unchanged
+input. The last genuine image stays historical while updating; profiles/export metadata
+remain bound to that displayed frame. Live performs no automatic configured figure
+export and preserves the explicit export preference. Defaults remain nominal 64 source
+samples, 4 workers, 8 draws/source and detector seed 1729; no convergence/time claim.
+
+Legacy Geometry/Mosaic/Detector/Beam grouping informs presentation only. Native model
+specimen coordinates provide supported lattice/site-displacement controls; configured
+CIF input does not invent independent lattice/Debye sliders. Legacy pruning, old optical
+equations and unsupported features remain absent. Native Simulator execution is separate
+from the still disconnected fitting Run/adoption/stage-result hooks.

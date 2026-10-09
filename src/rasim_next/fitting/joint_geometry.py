@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from typing import Literal
@@ -593,6 +594,30 @@ def _finite_jacobian(
     return jacobian
 
 
+def validate_joint_geometry_start(
+    initial: JointGeometryState,
+    bounds: JointGeometryBounds,
+    *,
+    unobserved_parameters: tuple[str, ...] = (),
+) -> None:
+    """Validate declared starts without replacing adjustable or fixed coordinates."""
+    if not isinstance(initial, JointGeometryState) or not isinstance(bounds, JointGeometryBounds):
+        raise TypeError("joint initial state and bounds must use their canonical types")
+    values, lower, upper = initial.as_array(), bounds.lower.as_array(), bounds.upper.as_array()
+    if np.any(values < lower) or np.any(values > upper):
+        raise ValueError("joint starting values lie outside the declared bounds")
+    if lower[-1] <= 0.0:
+        raise ValueError("private hBN calibrant distance bounds must be positive metres")
+    for name, expected in DEFAULT_FIXED_REFERENCE_PARAMETERS:
+        if getattr(initial, name) != expected:
+            raise ValueError(f"joint fixed reference {name} must remain {expected}")
+    if any(name not in LOCAL_PARAMETER_NAMES for name in unobserved_parameters):
+        raise ValueError("unknown unobserved joint parameter")
+    for name in unobserved_parameters:
+        if getattr(initial, name) != 0.0:
+            raise ValueError(f"unobserved joint reference {name} must remain zero")
+
+
 def fit_joint_geometry(
     *,
     hbn_observations: HbnRingObservations,
@@ -603,6 +628,8 @@ def fit_joint_geometry(
     pbi2_y2_images: tuple[IndexedGeometryImage, ...],
     base_detector_rotation: ArrayLike,
     bounds: JointGeometryBounds | None = None,
+    initial: JointGeometryState | None = None,
+    checkpoint: Callable[[str], None] | None = None,
 ) -> JointGeometryFitResult:
     """Fit the identifiable geometry after fixing the declared mechanical references."""
 
@@ -618,7 +645,11 @@ def fit_joint_geometry(
     if not se3 or not te3:
         raise ValueError("Bi2Se3 and Bi2Te3 image series are required")
     rotation = np.asarray(base_detector_rotation, dtype=np.float64)
-    initial = JointGeometryState.from_hbn(hbn_calibration)
+    explicit_initial = initial is not None
+    if initial is None:
+        initial = JointGeometryState.from_hbn(hbn_calibration)
+    if not isinstance(initial, JointGeometryState):
+        raise TypeError("initial must be a JointGeometryState")
     active_bounds = JointGeometryBounds.around_hbn(hbn_calibration) if bounds is None else bounds
     lower = active_bounds.lower.as_array()
     upper = active_bounds.upper.as_array()
@@ -629,8 +660,16 @@ def fit_joint_geometry(
         for name in LOCAL_PARAMETER_NAMES
         if (name.startswith("pbi2_y1_") and not y1) or (name.startswith("pbi2_y2_") and not y2)
     )
+    validate_joint_geometry_start(initial, active_bounds, unobserved_parameters=unobserved)
     for name, value in fixed_reference.items():
-        initial_values[JOINT_GEOMETRY_PARAMETER_NAMES.index(name)] = value
+        if not explicit_initial:
+            initial_values[JOINT_GEOMETRY_PARAMETER_NAMES.index(name)] = value
+
+    def check(phase: str) -> None:
+        if checkpoint is not None:
+            checkpoint(phase)
+
+    check("initial residual")
     fitted_indices = np.asarray(
         [
             index
@@ -710,6 +749,7 @@ def fit_joint_geometry(
     def raw_residual_array(fitted_values: FloatArray) -> FloatArray:
         nonlocal evaluation_count
         evaluation_count += 1
+        check(f"residual evaluation {evaluation_count}")
         return np.array(
             evaluate_joint_geometry_residual(
                 JointGeometryState.from_array(expand_fitted_values(fitted_values)),
@@ -729,6 +769,7 @@ def fit_joint_geometry(
         except GeometryPredictionError:
             return np.full(residual_size, 1.0e6, dtype=np.float64)
 
+    check("optimization")
     optimized = least_squares(
         optimizer_residual_array,
         initial_values[fitted_indices],
@@ -746,6 +787,7 @@ def fit_joint_geometry(
     optimized_values = expand_fitted_values(np.asarray(optimized.x, dtype=np.float64))
     state = JointGeometryState.from_array(optimized_values)
     raw_residual = raw_residual_array(optimized.x)
+    check("qualification Jacobian")
     jacobian = _finite_jacobian(
         raw_residual_array,
         np.asarray(optimized.x, dtype=np.float64),
@@ -754,6 +796,7 @@ def fit_joint_geometry(
         steps[fitted_indices],
     )
     scaled_jacobian = jacobian * half_span[fitted_indices][None, :]
+    check("rank and covariance")
     _, singular, right = np.linalg.svd(scaled_jacobian, full_matrices=False)
     tolerance = singular[0] * max(scaled_jacobian.shape) * np.finfo(np.float64).eps
     rank = int(np.count_nonzero(singular > tolerance))
@@ -815,6 +858,7 @@ def fit_joint_geometry(
         ("pbi2_y2", y2),
     ):
         for image in images:
+            check(f"metrics {specimen_id}/{image.image_id}")
             _, site_error, image_beam_origin = _predict_image(
                 specimen_id,
                 image,
@@ -842,6 +886,7 @@ def fit_joint_geometry(
     z_b_m = float(closest_beam_point[2] - pivot[2])
 
     def derived_z_b(fitted_values: FloatArray) -> float:
+        check("conditional zB uncertainty")
         candidate = JointGeometryState.from_array(expand_fitted_values(fitted_values))
         _, _, candidate_origin = _absolute_instrument_and_model(
             "bi2se3",
@@ -892,6 +937,7 @@ def fit_joint_geometry(
         and np.all(fitted_confident)
         and metrics_qualified
     )
+    check("result")
     return JointGeometryFitResult(
         state=state,
         success=bool(optimized.success),

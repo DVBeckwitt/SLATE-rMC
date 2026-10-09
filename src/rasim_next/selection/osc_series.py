@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from time import perf_counter
@@ -154,12 +155,14 @@ class OscGeometrySeriesConfiguration:
 
 def load_osc_geometry_series(
     path: str | Path,
+    *,
+    source_bytes: bytes | None = None,
 ) -> OscGeometrySeriesConfiguration:
     """Load one strict, manifest-relative OSC geometry series."""
 
     manifest_path = Path(path).resolve()
     document = _mapping(
-        load_strict_yaml_mapping(manifest_path),
+        load_strict_yaml_mapping(manifest_path, source_bytes=source_bytes),
         "OSC geometry series",
         required={"schema_version", "simulation_config", "incidence_axis_index", "images"},
         optional={"qualification_profile"},
@@ -753,6 +756,10 @@ def index_osc_geometry_series(
     blind_policy: BlindIndexingPolicy | None = None,
     track_policy: PeakIndexingPolicy | None = None,
     instrument_by_image_id: dict[str, CompiledInstrument] | None = None,
+    detector_native_counts_by_image_id: Mapping[str, NDArray] | None = None,
+    detector_valid_mask_by_image_id: Mapping[str, NDArray] | None = None,
+    detector_mask_revision_by_image_id: Mapping[str, str] | None = None,
+    checkpoint: Callable[[str], None] | None = None,
 ) -> OscGeometryIndexingRun:
     """Index one declared OSC series, retaining a preflight run when admission is incomplete."""
 
@@ -775,6 +782,17 @@ def index_osc_geometry_series(
     if set(overrides) - expected_ids:
         raise ValueError("instrument overrides contain unknown image IDs")
 
+    for supplied in (
+        detector_native_counts_by_image_id,
+        detector_valid_mask_by_image_id,
+        detector_mask_revision_by_image_id,
+    ):
+        if supplied is not None and set(supplied) != expected_ids:
+            raise ValueError("explicit detector inputs must match the complete image roster")
+    if (detector_valid_mask_by_image_id is None) != (detector_mask_revision_by_image_id is None):
+        raise ValueError("explicit masks require their revisions")
+    if checkpoint is not None:
+        checkpoint("Compiling series geometry and material")
     base = load_simulation_config(series.config_path)
     if len(base.instrument.axis_rotations) != 1 or series.incidence_axis_index != 0:
         raise ValueError(
@@ -791,6 +809,8 @@ def index_osc_geometry_series(
     geometry_inputs = []
     geometry_contexts = []
     for index, image in enumerate(series.images):
+        if checkpoint is not None:
+            checkpoint(f"Preparing {image.image_id}")
         config = simulation_config_for_osc_image(base, image)
         inputs = (
             shared_inputs
@@ -803,7 +823,31 @@ def index_osc_geometry_series(
         context = build_geometry_only_ewald_context(inputs, instrument=override)
         geometry_inputs.append(inputs)
         geometry_contexts.append(context)
-        osc = read_osc(image.osc_path)
+        counts = (
+            read_osc(image.osc_path).detector_native_counts
+            if detector_native_counts_by_image_id is None
+            else np.asarray(detector_native_counts_by_image_id[image.image_id])
+        )
+        if (
+            counts.shape != context.instrument.detector_shape_rc
+            or counts.dtype.kind not in "iuf"
+            or not np.all(np.isfinite(counts))
+        ):
+            raise ValueError(
+                "native detector counts must match the configured shape and be finite real values"
+            )
+        valid_mask = detector_valid_mask_from_counts(counts)
+        revision = "osc-all-zero-edge-mask.v1"
+        if detector_valid_mask_by_image_id is not None:
+            supplied_mask = np.asarray(detector_valid_mask_by_image_id[image.image_id])
+            if supplied_mask.dtype.kind != "b" or supplied_mask.shape != counts.shape:
+                raise ValueError("explicit detector mask must be boolean with native image shape")
+            valid_mask = valid_mask & supplied_mask
+            revision = (
+                "osc-all-zero-edge-mask.v1+" + detector_mask_revision_by_image_id[image.image_id]
+            )
+        if checkpoint is not None:
+            checkpoint(f"Discovering native peaks in {image.image_id}")
         frame = build_osc_angle_frame(
             mean_direction_lab=inputs.config.source.mean_direction_lab,
             instrument=context.instrument,
@@ -811,15 +855,17 @@ def index_osc_geometry_series(
             revision=f"osc-geometry-angle-frame.{image.image_id}.v1",
         )
         discovery = discover_measured_cake_peaks(
-            osc.detector_native_counts,
+            counts,
             instrument=context.instrument,
             angle_frame=frame,
             image_id=image.image_id,
-            detector_valid_mask=detector_valid_mask_from_counts(osc.detector_native_counts),
-            detector_mask_revision="osc-all-zero-edge-mask.v1",
+            detector_valid_mask=valid_mask,
+            detector_mask_revision=revision,
             policy=blind,
         )
         discoveries.append(discovery)
+        if checkpoint is not None:
+            checkpoint(f"Indexing discovered coordinates in {image.image_id}")
         incidence_deg = image.axis_rotation_angles_deg[series.incidence_axis_index]
         image_results.append(
             index_discovered_integer_l_peaks(
@@ -830,6 +876,8 @@ def index_osc_geometry_series(
             )
         )
         models.append(ExactTagGeometryModel(inputs))
+    if checkpoint is not None:
+        checkpoint("Admitting replicated branch tracks")
     selection = select_confident_branch_tracks(tuple(image_results), policy=track)
     observation_packs = []
     if not overrides:

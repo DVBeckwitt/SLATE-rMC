@@ -726,6 +726,31 @@ See [supported staged fitting](STAGED_FITTING.md) for Bi ordered continuation,
 Pb disorder/control recipes and the shared generic-CIF/acquisition boundary.
 
 
+## Independent desktop native drafts
+
+The desktop Simulator binds the six admitted native recipes without prepared observations,
+fit records or nuisance scale. It reuses `load_native_fit_physics` on hash-bound immutable bytes,
+the actual Bi/Pb joint model coordinates, `integration_parts`, each part's detector and
+`iter_native_pixel_batches`. Bound Bi specular stack overrides precede source partitioning.
+Native drafts and configured YAML drafts are separate schema-10 project states. Source/integration
+rules, repeats, proposal mosaic and integrated rectangle width are explicit; current support is
+CPU deterministic integration with one worker and nested BLAS thread. See the
+[desktop workflow](../interactive/README.md#independent-native-simulator-and-reviewed-experiment-transfer).
+
+Exact closed surface/phase declarations are checked against canonical shares before detector
+binding. An unchanged Pb parent simplex preserves its exact declared weights; changed shares
+still use the canonical simplex equation. This avoids last-bit reconstruction of a declared
+reference simplex and retains tiny probabilities without normalization or pruning. The retained
+fixed-rule GD1/Bi2Te3 comparisons establish adapter fidelity for those inputs only. Partial native
+snapshots sum complete-panel additive event batches; integration completion is not convergence
+or fit qualification. Native Bi disorder and Pb reflectivity stay unsupported.
+
+Desktop delivery uses the user's representative nominal-proof policy in
+[VALIDATION.md](VALIDATION.md#desktop-implementation-verification). Existing numerical validation,
+rank/covariance checks and truthful fitting qualification states remain authoritative; this UI
+binding adds no fit qualification or new observation-preparation recipe.
+
+
 ## Conditional finite background hull
 
 `NativeBackgroundHull(columns_count, weights0)` profiles one exposure for a fixed

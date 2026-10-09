@@ -235,14 +235,18 @@ class NativeFitObservations:
         )
 
 
-def load_native_fit_observations(path: Path) -> NativeFitObservations:
+def load_native_fit_observations(
+    path: Path, *, arrays_path: Path | None = None
+) -> NativeFitObservations:
     """Read numeric NPZ only, verify its hash and retain the declared native support."""
     path = Path(path)
     payload = path.read_bytes()
     record = json.loads(payload)
     if record.get("schema") != "rasim-native-fit-observations-v1":
         raise ValueError("unsupported native observation schema")
-    arrays_path = path.parent / record["arrays"]["path"]
+    arrays_path = (
+        path.parent / record["arrays"]["path"] if arrays_path is None else Path(arrays_path)
+    )
     with arrays_path.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
     if digest != record["arrays"]["sha256"]:

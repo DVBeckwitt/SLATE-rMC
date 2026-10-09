@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import InitVar, asdict, dataclass, field, replace
 from numbers import Real
 from pathlib import Path
 from typing import Any
@@ -467,11 +467,12 @@ class SimulationConfiguration:
     numerics: NumericalConfiguration
     output_directory: Path
     outputs: SimulationOutputConfiguration
+    cif_source_bytes: InitVar[bytes | None] = None
     cif_sha256: str = field(init=False)
     physics_revision: str = field(init=False)
     render_revision: str = field(init=False)
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, cif_source_bytes: bytes | None) -> None:
         detector_path_wavelengths = self.instrument.detector_path_wavelength_A
         if detector_path_wavelengths:
             if self.source.wavelength_model_id == "gaussian.v1":
@@ -494,7 +495,11 @@ class SimulationConfiguration:
                     "detector-path attenuation table must contain every source line and the "
                     "nominal mean wavelength"
                 )
-        cif_sha256 = hashlib.sha256(self.material.cif_path.read_bytes()).hexdigest()
+        if cif_source_bytes is not None and type(cif_source_bytes) is not bytes:
+            raise ValueError("cif_source_bytes must be immutable bytes")
+        cif_sha256 = hashlib.sha256(
+            self.material.cif_path.read_bytes() if cif_source_bytes is None else cif_source_bytes
+        ).hexdigest()
         payload = {
             "schema_version": self.schema_version,
             "cif_sha256": cif_sha256,
@@ -686,11 +691,15 @@ def _artifact(value: Any, path: str) -> ArtifactConfiguration:
     )
 
 
-def load_strict_yaml_mapping(path: str | Path) -> dict[str, Any]:
+def load_strict_yaml_mapping(
+    path: str | Path, *, source_bytes: bytes | None = None
+) -> dict[str, Any]:
     """Load exactly one alias-free YAML mapping with duplicate-key rejection."""
 
     path = Path(path)
-    text = path.read_text(encoding="utf-8")
+    text = (
+        path.read_text(encoding="utf-8") if source_bytes is None else source_bytes.decode("utf-8")
+    )
     if any(isinstance(event, AliasEvent) for event in yaml.parse(text)):
         raise ValueError("YAML aliases are not supported")
     documents = list(yaml.load_all(text, Loader=_StrictLoader))
@@ -705,6 +714,9 @@ def load_simulation_config(
     path: str | Path,
     *,
     repository_root: str | Path | None = None,
+    source_bytes: bytes | None = None,
+    max_referenced_cif_bytes: int | None = None,
+    stored_paths: dict[Path, Path] | None = None,
 ) -> SimulationConfiguration:
     """Load one strict, config-relative ``rasim-simulation-v2`` document."""
 
@@ -715,7 +727,7 @@ def load_simulation_config(
         else Path(__file__).resolve().parents[3]
     )
     document = _mapping(
-        load_strict_yaml_mapping(config_path),
+        load_strict_yaml_mapping(config_path, source_bytes=source_bytes),
         "configuration",
         required={
             "schema_version",
@@ -739,15 +751,34 @@ def load_simulation_config(
         "material",
         required={"cif_path", "phase_id"},
     )
+    reference_base = next(
+        (
+            original
+            for original, stored in (stored_paths or {}).items()
+            if Path(stored).resolve() == config_path
+        ),
+        config_path,
+    )
     cif_path = (
-        config_path.parent / _string(material_data["cif_path"], "material.cif_path")
+        reference_base.parent / _string(material_data["cif_path"], "material.cif_path")
     ).resolve()
+    from rasim_next.io.storage import resolve_storage_path
+
+    cif_path = resolve_storage_path(cif_path, stored_paths)
     if not cif_path.is_file():
         raise ValueError(f"material.cif_path does not exist: {cif_path}")
     material = MaterialConfiguration(
         cif_path=cif_path,
         phase_id=_string(material_data["phase_id"], "material.phase_id"),
     )
+    cif_source_bytes = None
+    if max_referenced_cif_bytes is not None:
+        if type(max_referenced_cif_bytes) is not int or max_referenced_cif_bytes <= 0:
+            raise ValueError("max_referenced_cif_bytes must be a positive integer")
+        with cif_path.open("rb") as stream:
+            cif_source_bytes = stream.read(max_referenced_cif_bytes + 1)
+        if len(cif_source_bytes) > max_referenced_cif_bytes:
+            raise ValueError("referenced CIF exceeds the declared byte limit")
 
     source_data = _mapping(
         document["source"],
@@ -1197,6 +1228,7 @@ def load_simulation_config(
         numerics=numerics,
         output_directory=output_directory,
         outputs=outputs,
+        cif_source_bytes=cif_source_bytes,
     )
 
 

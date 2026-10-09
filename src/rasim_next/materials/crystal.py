@@ -417,12 +417,16 @@ def read_crystal(
     *,
     phase_id: str | None = None,
     expected_sha256: str | None = None,
+    source_bytes: bytes | None = None,
 ) -> CrystalStructure:
     """Read exactly one CIF structure and expand its symmetry exactly once."""
 
     source_path = Path(path)
     try:
-        source_bytes = source_path.read_bytes()
+        if source_bytes is None:
+            source_bytes = source_path.read_bytes()
+        elif type(source_bytes) is not bytes:
+            raise ValueError("source_bytes must be immutable bytes")
         actual_sha256 = hashlib.sha256(source_bytes).hexdigest()
         if expected_sha256 is not None:
             if (
