@@ -765,16 +765,23 @@ class ConditionalStructureDetector:
             batch = patch = None
 
     def integrate_native_regions(
-        self, projection: NativePixelRegionProjection, *, scattering_cache=None
+        self,
+        projection: NativePixelRegionProjection,
+        *,
+        scattering_cache=None,
+        source_state_indices=None,
     ):
         """Reprepare current strength/mosaic/geometry, then project native pixel mass.
 
         No strength-dependent axial or angular response survives this call.
         Fractional observation coverage multiplies pixel masses exactly once.
+        Source subsets retain original probabilities; callers sum disjoint subsets.
         """
         bounds = native_projection_bounds_px(projection, self.detector_shape_rc)
         result = np.zeros(projection.observation_count)
-        for patch_bounds, image in self._pixel_patches(bounds, scattering_cache=scattering_cache):
+        for patch_bounds, image in self._pixel_patches(
+            bounds, scattering_cache=scattering_cache, source_state_indices=source_state_indices
+        ):
             projection.accumulate_native_patch(result, patch_bounds, image)
             image = None
         return result

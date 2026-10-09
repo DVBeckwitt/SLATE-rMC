@@ -59,15 +59,36 @@ source/response identity and cache. Equal orders preserve the unsplit path.
 
 The explicitly selected `FiberIntegrationRule.local_m0_angular_rule=
 "cdf_stratified_importance.v1"` is a nominal local-lamella endpoint estimator.
-It uses one scrambled two-dimensional Sobol net of 4096 axial nodes and 32
-conditional angular strata per node; `local_m0_seed` is the direct scramble seed
-and `local_m0_replica` is explicit response identity. Original source rows share
-that net within a replica. Disjoint physical arcs retain their original proposal
-mass Z and weight `Z/(4096*32*pq*pphi)`, including the original attempted divisor.
+It uses one scrambled two-dimensional Sobol net with at least 4096 axial nodes
+and 32 conditional angular strata per node. The counts are
+`N=2**local_m0_axial_power` and `S=2**local_m0_angular_power`; refinements retain
+whole strata per batch and respect the declared total-node budget.
+`local_m0_seed` is the direct scramble seed and `local_m0_replica` is explicit
+response identity. Original source rows share that net within a replica.
+Disjoint physical arcs retain their original proposal mass Z and weight
+`Z/(N*S*pq*pphi)`, including the original attempted divisor.
 Nonempty unresolved CDF arcs fail; empty support contributes zero without
 resampling. It reuses canonical signed strengths, transfer and native Gaussian
 probabilities. It does not qualify accuracy, shared regular error or a fit.
 The default remains `resolved_cdf_gl8.v1`; regular quadrature is unchanged.
+
+Importance inversion retains the 2e-15 CDF residual requirement. A selected
+quantile above the half-turn is solved in a signed periodic chart, with compensated
+2-pi translation; the original arc masses and Sobol strata are unchanged.
+Wrapped-Cauchy evaluation leaves trigonometric range reduction to libm rather
+than subtracting a rounded period near its peak. Node azimuths may therefore be
+negative; their sine and cosine define the same physical direction.
+
+Resolved angular preparation is compiled without fast-math and streamed in
+16-axial-node slices. Global axial masses and the cumulative angular-node budget
+are retained across slices. A prefix emitted before an exception is not a
+complete integral.
+
+`ConditionalStructureDetector.integrate_native_regions(..., source_state_indices=...)`
+can project selected original source rows for caller-managed CPU parallelism.
+The shared support calculation and original source probabilities are unchanged.
+The caller must sum every disjoint source partition exactly once and reject an
+incomplete set; a partial source integral is not a normalized prediction.
 
 Production contracts are frozen dataclasses or immutable model objects. Numeric arrays are copied to
 contiguous, read-only storage at public boundaries. Shapes, units, frames, measure IDs, validity,

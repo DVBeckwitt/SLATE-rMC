@@ -384,3 +384,50 @@ The external `bi2se3_newer5_hybrid_attempt.ra_diag.npz` in the October 9
 operator, covariance, original region identities, unchanged state, source bytes,
 checks and failure manifest. `Bi2Se3_newer5_hybrid_support.png`/`.pdf` show the
 previous nominal curves and exact detector support; they are not a new fit.
+
+
+### October 9 numerical repair continuation
+
+The authorized continuation kept the expanded observation operator and the saved
+family-fit state. The first divergent stage was angular inverse-CDF evaluation
+(`CORRECTED`, analytic 90-digit wrapped-Cauchy oracle). Near 2-pi, adjacent float64
+angles can both miss the unchanged 2e-15 CDF tolerance: one actual target had
+nearest-bracket residual magnitudes 2.8194e-15 and 2.9888e-15. A compensated signed
+periodic chart resolves that target without changing its original arc mass or
+stratum. The two captured failures have repaired oracle residuals below 1.09e-17.
+This is a scalar numerical correction, not detector or physical-fit validation.
+
+Compiled resolved-panel preparation and 16-node streaming preserve global masses
+and the cumulative work limit. On the captured first axial coordinate repeated
+17 times (25,296 angular nodes), all panel and emitted-node arrays matched
+bitwise across Python/compiled, sliced/unsliced and two output batch sizes. A
+one-node-short global limit rejected the calculation. The full captured resolved
+rule still exceeds its declared limit; no limit was relaxed.
+
+The full nominal (4096 by 32) and finer (8192 by 64, strength order 6) starting
+predictions were each partitioned over their four original source rows. All eight
+CPU workers remained unfinished at the declared 900-second check limit and were
+terminated. An earlier superseded serial comparison was also stopped incomplete.
+No complete baseline, optimizer evaluation, candidate objective or new fit exists.
+The previous nominal fit remains unchanged and physically unadopted.
+
+A separately capped 88-second source-zero profile sampled Gaussian native-pixel
+deposition repeatedly from 30 through 80 seconds, following initial compilation.
+This identifies a concrete acceleration target; it is not a complete-work runtime
+benchmark. The explicit user-requested GPU branch is a separate implementation
+and validation task, not an accepted replacement for this failed CPU run.
+
+A final bounded CPU continuation omitted only prediction rows unused by the
+likelihood and every frozen gate. All 2,274 required rows, their 4,257,757 native
+memberships, and 2,613,949 pixels were preserved. The omitted support included 64
+invalid diagnostic 00L bins at 2.35--8.65 degrees. All eight nominal/finer source
+jobs were still incomplete at the 15:18 UTC cutoff; no source result or objective
+was obtained. Their completion mask is retained. A live stack sample still found
+CPU local-m0 deposition, while the separate hybrid GPU workers had advanced to
+CPU regular-rod deposition. These samples locate work, not timing fractions.
+
+The external `bi2se3_newer5_joint_repair.ra_diag.npz` retains the prepared data,
+unchanged initial state, numerical proofs, bounded attempts, input/source hashes,
+and caller bytes. Any continuation must bind a new finite compute budget and
+complete the frozen baseline, preservation and numerical checks before fitting
+or adopting a candidate. Partial source contributions are never complete fits.

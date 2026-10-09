@@ -932,12 +932,11 @@ def _axial_mixture_quantiles(quantiles, lower, upper, centers, width, weights, u
 
 @numba.njit(nogil=True)
 def _wrapped_cauchy_cdf(value, width):
-    turns = np.floor((value + np.pi) / (2 * np.pi))
-    reduced = value - 2 * np.pi * turns
+    # Keep the original argument for libm range reduction. Subtracting a rounded
+    # 2*pi first loses precision at narrow peaks near the periodic boundary.
+    turns = 2 * np.sign(value) * max(0.0, np.ceil((abs(value) - 2 * np.pi) / (4 * np.pi)))
     return (
-        turns
-        + 0.5
-        + np.arctan2(np.sin(reduced / 2), np.tanh(width / 2) * np.cos(reduced / 2)) / np.pi
+        turns + 0.5 + np.arctan2(np.sin(value / 2), np.tanh(width / 2) * np.cos(value / 2)) / np.pi
     )
 
 
@@ -1015,6 +1014,7 @@ def _angular_inverse_cdf(
     )
 
 
+@numba.njit(nogil=True, fastmath=False)
 def _resolved_angular_cdf_panels(
     q, bounds, centers, widths, power, maximum_width, regions, maximum_nodes, k
 ):
@@ -1207,8 +1207,12 @@ class FiberQuadratureNodes:
             dtype = np.int64 if name == "axial_index" else np.float64
             value = np.array(getattr(self, name), dtype=dtype, copy=True)
             dimensions = 2 if name == "signed_strength_fractions" else 1
-            if value.ndim != dimensions or np.any(~np.isfinite(value)) or np.any(value < 0):
-                raise ValueError("quadrature arrays must be finite nonnegative vectors")
+            if (
+                value.ndim != dimensions
+                or np.any(~np.isfinite(value))
+                or (name != "ewald_azimuth_rad" and np.any(value < 0))
+            ):
+                raise ValueError("quadrature arrays must be finite; non-angle entries nonnegative")
             value.setflags(write=False)
             object.__setattr__(self, name, value)
         mass = self.strength_weighted_mass if weighted else self.weight_Ainv_rad
@@ -1216,6 +1220,7 @@ class FiberQuadratureNodes:
             self.ewald_azimuth_rad.shape != self.axial_index.shape
             or mass.shape != self.axial_index.shape
             or np.any(self.axial_index >= len(self.positive_axial_Ainv))
+            or np.any(self.ewald_azimuth_rad < -2 * np.pi)
             or np.any(self.ewald_azimuth_rad > 2 * np.pi)
             or np.any(mass <= 0)
         ):
@@ -1230,9 +1235,8 @@ class FiberQuadratureNodes:
 
 
 @numba.njit(nogil=True, fastmath=False, cache=False)
-def _local_m0_importance_block(axial, pdf, unit, first, last, bounds, centers, widths):
+def _local_m0_importance_block(axial, pdf, unit, first, last, bounds, centers, widths, strata):
     """Conditional disjoint-arc importance measure; no physical factors or pruning."""
-    strata = 32
     index = np.empty((last - first) * strata, dtype=np.int64)
     azimuth = np.empty(len(index))
     mass = np.empty(len(index))
@@ -1272,10 +1276,20 @@ def _local_m0_importance_block(axial, pdf, unit, first, last, bounds, centers, w
                 or (remainder > 0 and cdf_target <= cdf_left[k])
             ):
                 raise ValueError("local-m0 restricted CDF target is unresolved")
+            inverse_left, inverse_right, inverse_target = left[k], right[k], cdf_target
+            at_half_turn = _angular_cdf_density(np.pi, centers[i], widths[i], offsets, 0.2)[0]
+            if cdf_target >= at_half_turn:
+                # Exact periodic re-expression, with the low part of mathematical
+                # 2*pi retained. Keep original arc masses and Sobol strata unchanged.
+                inverse_left = (max(left[k], np.pi) - 2 * np.pi) - 2.4492935982947064e-16
+                inverse_right = (right[k] - 2 * np.pi) - 2.4492935982947064e-16
+                inverse_target -= 1.0
+            else:
+                inverse_right = min(inverse_right, np.pi)
             phi, density = _angular_inverse_cdf(
-                cdf_target,
-                left[k],
-                right[k],
+                inverse_target,
+                inverse_left,
+                inverse_right,
                 centers[i],
                 widths[i],
                 offsets,
@@ -1283,12 +1297,14 @@ def _local_m0_importance_block(axial, pdf, unit, first, last, bounds, centers, w
                 remainder / arc_mass[k],
                 True,
             )
-            error = _angular_cdf_density(phi, centers[i], widths[i], offsets, 0.2)[0] - cdf_target
-            if not left[k] <= phi < right[k] or abs(error) > 2e-15:
+            error = (
+                _angular_cdf_density(phi, centers[i], widths[i], offsets, 0.2)[0] - inverse_target
+            )
+            if not inverse_left <= phi < inverse_right or abs(error) > 2e-15:
                 raise ValueError(
                     "local-m0 inverse CDF failed its original arc bracket",
-                    phi - left[k],
-                    right[k] - phi,
+                    phi - inverse_left,
+                    inverse_right - phi,
                     error,
                     cdf_left[k],
                     cdf_left[k] + arc_mass[k],
@@ -1321,7 +1337,7 @@ def iter_local_m0_coordinates(
 
     This channel integrates external Q, with no fabricated q=0 response. Its
     default uses full-support Sobol axial nodes and native-resolution GL8 angular
-    panels. Explicit nominal importance uses 32 conditional CDF strata instead;
+    panels. Explicit nominal importance uses at least 32 conditional CDF strata;
     both remain independent of the regular strength-weighted internal phase chart.
     """
     if radial_Ainv != 0:
@@ -1330,13 +1346,15 @@ def iter_local_m0_coordinates(
         raise ValueError("unknown local-m0 angular rule")
     importance = angular_rule == "cdf_stratified_importance.v1"
     if importance and (
-        axial_power != 12
-        or angular_power != 5
-        or batch_size < 32
+        axial_power < 12
+        or angular_power < 5
+        or batch_size < 2**angular_power
         or batch_size > 16384
-        or batch_size % 32
+        or batch_size % 2**angular_power
     ):
-        raise ValueError("nominal local-m0 importance requires 4096 axial nodes and 32 strata")
+        raise ValueError("local-m0 importance needs at least 4096 axial nodes and 32 whole strata")
+    if importance and 2 ** (axial_power + angular_power) > maximum_angular_panel_nodes:
+        raise ValueError("local-m0 importance node budget exceeded before allocation")
     lower, upper = axial_bounds_Ainv
     unit = qmc.Sobol(2, scramble=True, seed=axial_seed).random_base2(axial_power)
     axial, pdf = _axial_mixture_quantiles(
@@ -1357,39 +1375,53 @@ def iter_local_m0_coordinates(
         reference_mosaic.lorentzian_half_width_rad,
     )
     if importance:
-        for first in range(0, len(axial), batch_size // 32):
+        strata = 2**angular_power
+        for first in range(0, len(axial), batch_size // strata):
             index, phi, weight = _local_m0_importance_block(
                 axial,
                 pdf,
                 unit,
                 first,
-                min(first + batch_size // 32, len(axial)),
+                min(first + batch_size // strata, len(axial)),
                 np.asarray(source_region_bounds),
                 centers,
                 widths,
+                strata,
             )
             if len(index):
                 yield FiberQuadratureNodes(axial, index, phi, weight)
         return
-    panels = _resolved_angular_cdf_panels(
-        axial,
-        np.asarray(source_region_bounds),
-        centers,
-        widths,
-        angular_power,
-        2 * np.pi,
-        np.asarray(angular_resolution_regions),
-        maximum_angular_panel_nodes,
-        np.linalg.norm(ki_sample_Ainv),
-    )
-    count = len(panels[0]) * 8
-    if not count:
-        return
     nodes, weights = roots_legendre(8)
-    for index, phi, angular_mass in _angular_cdf_panel_blocks(
-        panels, centers, widths, nodes, weights, min(batch_size, count)
-    ):
-        yield FiberQuadratureNodes(axial, index, phi, mass[index] * angular_mass)
+    used_nodes = 0
+    # Bound live preparation without resetting the total work guard. Global
+    # axial nodes and their probability masses are unchanged by these slices.
+    for first in range(0, len(axial), 16):
+        stop = min(first + 16, len(axial))
+        panels = _resolved_angular_cdf_panels(
+            axial[first:stop],
+            np.asarray(source_region_bounds),
+            centers[first:stop],
+            widths[first:stop],
+            angular_power,
+            2 * np.pi,
+            np.asarray(angular_resolution_regions),
+            maximum_angular_panel_nodes - used_nodes,
+            np.linalg.norm(ki_sample_Ainv),
+        )
+        count = len(panels[0]) * 8
+        used_nodes += count
+        if not count:
+            continue
+        for index, phi, angular_mass in _angular_cdf_panel_blocks(
+            panels,
+            centers[first:stop],
+            widths[first:stop],
+            nodes,
+            weights,
+            min(batch_size, count),
+        ):
+            global_index = first + index
+            yield FiberQuadratureNodes(axial, global_index, phi, mass[global_index] * angular_mass)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1436,18 +1468,6 @@ class FiberIntegrationRule:
             raise ValueError("unknown local-m0 angular rule")
         if type(self.local_m0_replica) is not int or self.local_m0_replica < 0:
             raise ValueError("local-m0 replica identity must be a nonnegative integer")
-        if self.local_m0_angular_rule == "cdf_stratified_importance.v1" and (
-            self.local_m0_axial_power != 12
-            or self.local_m0_angular_power != 5
-            or self.batch_size < 32
-            or self.batch_size > 16384
-            or self.batch_size % 32
-            or type(self.local_m0_seed) is not int
-            or not 0 <= self.local_m0_seed < 2**32
-        ):
-            raise ValueError(
-                "nominal local-m0 importance requires 4096 by 32 and bounded whole strata"
-            )
         for name in (
             "strength_gauss_order",
             "strength_scalar_order",
@@ -1476,6 +1496,17 @@ class FiberIntegrationRule:
         ):
             if type(getattr(self, name)) is not int or getattr(self, name) < 0:
                 raise ValueError(f"{name} must be a nonnegative integer")
+        if self.local_m0_angular_rule == "cdf_stratified_importance.v1" and (
+            self.local_m0_axial_power < 12
+            or self.local_m0_angular_power < 5
+            or self.batch_size < 2**self.local_m0_angular_power
+            or self.batch_size > 16384
+            or self.batch_size % 2**self.local_m0_angular_power
+            or self.local_m0_seed >= 2**32
+        ):
+            raise ValueError(
+                "local-m0 importance needs at least 4096 by 32 and bounded whole strata"
+            )
         for name in (
             "strength_scalar_phase_step_rad",
             "pixel_error_rtol",
