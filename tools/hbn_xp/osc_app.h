@@ -4,7 +4,9 @@
 #include <windows.h>
 #include <windowsx.h>
 #include "osc_analysis.h"
+#include "cif_peaks.h"
 #include <commdlg.h>
+#include <commctrl.h>
 #include <float.h>
 #include <math.h>
 #include <stdint.h>
@@ -40,7 +42,17 @@ enum {
     RESULT = 230,
     STAGE = 231
 };
-enum { JOB_LOAD = 1, JOB_DARK, JOB_FIT, JOB_CSV, JOB_ASC, JOB_ANGLES, JOB_ANGLE_EXPORT };
+enum {
+    JOB_LOAD = 1,
+    JOB_DARK,
+    JOB_FIT,
+    JOB_CSV,
+    JOB_ASC,
+    JOB_ANGLES,
+    JOB_ANGLE_EXPORT,
+    JOB_CIF,
+    JOB_CIF_EXPORT
+};
 #define DONE_MESSAGE (WM_APP + 1)
 #define STAGE_MESSAGE (WM_APP + 2)
 
@@ -75,11 +87,16 @@ typedef struct {
     unsigned char *angle_bgr;
     int angle_bitmap_width, angle_bitmap_height, angle_color_dirty;
     char calibration_text[160];
+    CifPeaks cif, pending_cif;
+    int cif_loaded, cif_selected, cif_dirty, cif_unknown_zero, updating_cif;
+    double cif_wavelength, cif_maximum;
+    char cif_path[MAX_PATH], cif_data_path[MAX_PATH];
 } App;
 
 enum {
     ANALYSIS_PAGE = 300,
     CALIBRATION_PAGE,
+    CIF_PAGE,
     APPLIED_GEOMETRY = 310,
     APPLY_INPUTS,
     APPLY_HBN,
@@ -102,6 +119,23 @@ enum {
     CLEAR_MASK,
     ANALYSIS_LABEL = 350,
     HBN_LABEL = 500
+};
+enum { PAGE_HBN, PAGE_ANALYSIS, PAGE_CIF };
+enum {
+    CIF_OPEN = 600,
+    CIF_EXPORT,
+    CIF_WAVELENGTH,
+    CIF_MAXIMUM,
+    CIF_CALCULATE,
+    CIF_USE_GEOMETRY,
+    CIF_UNKNOWN_ZERO,
+    CIF_LIST,
+    CIF_STATUS,
+    CIF_VIEW,
+    CIF_SORT,
+    CIF_CLEAR,
+    CIF_LABEL = 620,
+    CIF_END = 630
 };
 enum { VIEW_DETECTOR, VIEW_ANGLES, VIEW_SPLIT };
 enum { TOOL_PAN, TOOL_SECTOR, TOOL_MASK, TOOL_UNMASK };
@@ -143,5 +177,15 @@ void analysis_overlay(App *a, HDC dc);
 int analysis_detector_mouse(App *a, UINT msg, WPARAM wp, LPARAM lp);
 int analysis_export(App *a, const char *path);
 LRESULT CALLBACK angle_canvas_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp);
+void cif_controls(App *a);
+void cif_layout(App *a);
+void cif_status(App *a);
+int cif_command(App *a, int id, int notification);
+LRESULT cif_notify(App *a, NMHDR *header);
+void cif_publish(App *a);
+int cif_export(App *a, const char *path);
+const CifPeak *cif_selected_peak(const App *a);
+void cif_detector_overlay(App *a, HDC dc);
+void cif_angle_marker(App *a, HDC dc, RECT bounds);
 
 #endif

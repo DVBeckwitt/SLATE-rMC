@@ -1,6 +1,6 @@
 # SLATE OSC + hBN for Windows XP
 
-A portable native Win32 viewer, hBN detector calibrator and angular integrator.
+A portable native Win32 viewer, hBN detector calibrator, angular integrator and CIF reference viewer.
 Run `SLATE-OSC-XP.exe`.
 No Python, Qt, installation, network connection or GPU is required. Target: 32-bit
 Windows XP on an SSE2-capable processor (Pentium 4 or later). Use a 1024 by 768 or
@@ -17,6 +17,8 @@ column/row tilts about `-0.383836 / -1.344322 deg`, beam center
 The packaged `demo/hBN_analysis_geometry.csv` is the applied geometry from that
 example. Load it through File for a quick angular-analysis demonstration; it is
 specific to the supplied calibrant at its measured position.
+The demo folder also contains PbI2, Bi2Se3 and Bi2Te3 CIFs from the repository.
+These are separate material references, not models of the supplied hBN image.
 
 ## Viewing
 
@@ -152,6 +154,76 @@ for bins. The default 800 by 360 grid adds about 6.6 MiB, plus about 1.1 MiB for
 3000 by 3000 mask when used. Moving the cursor computes only its coordinate transform.
 Integration runs on demand; slower XP hardware remains responsive to Cancel.
 
+## CIF reference beside the image
+
+1. Choose **CIF** and **Load CIF**. Enter the measurement wavelength in angstroms
+   and the maximum 2theta in degrees. **Geometry A** copies the applied analysis
+   wavelength; click **Calculate** after changing inputs. The CIF's own wavelength
+   is not substituted for the measurement wavelength. A CIF can be calculated
+   before opening an OSC.
+2. The side table lists every signed **h k l**, **2theta deg**, and **raw |F|^2**
+   in electrons squared, including systematic extinctions. Use **Sort by intensity**
+   to bring the strongest entries to the top, or sort back by angle. Friedel mates
+   and other coincident reflections stay separate; there is no strength cutoff.
+3. Select a row with the mouse or arrow keys. A cyan curve marks that 2theta on
+   the detector; a vertical line marks it on the angular map and I(2theta) profile.
+   **View** selects detector, angular or split view while retaining the side table.
+   Angular views require an existing integration. Markers require applied matching
+   image geometry and wavelength (relative agreement 1e-10); edited inputs hide
+   markers until recalculated. **Clear mark** removes the selected reference.
+4. **Export peaks** saves hkl, d-spacing, 2theta, complex F, raw |F|^2, wavelength,
+   source/data CRC32, atom counts and factor mappings. Failed or canceled loads
+   preserve the previous table. Edited inputs must be recalculated before export.
+
+These are powder-position guides for visual comparison, not oriented-crystal spot
+predictions. Raw |F|^2 alone does not predict measured counts. No multiplicity,
+relative normalization, Lorentz/polarization, absorption, electron-radius factor,
+detector solid-angle or intensity correction is applied.
+
+The compatibility port follows `materials/crystal.py`, `materials/optics.py` and
+`ordered/amplitudes.py`. Gemmi 0.7.5 parses and expands the CIF once. For each signed
+reflection, d comes from the general-cell reciprocal metric and
+`2theta = 2 asin(wavelength/(2d))`. With `s=1/(2d)`:
+
+```text
+F = sum_sites occupancy * (f0(s) + f'(E) + i*f''(E))
+              * exp(-8*pi^2*Uiso*s^2) * exp(+2*pi*i*(h*x+k*y+l*z))
+raw SF intensity = |F|^2; E[eV] = 12398.419843320026 / wavelength[A]
+```
+
+The offline `cif_scattering.bin` contains Waasmaier elastic factors and Chantler
+anomalous factors from XrayDB 4.5.8/database 9.2. The elastic ion is used when
+available; otherwise the neutral factor is used and the mapping is shown explicitly
+in the status and CSV. Anomalous factors use the element. CIF dispersion values
+are not used. Each f' interval preserves the main program's local seven-knot cubic
+interpolation; f'' uses log-log linear interpolation. Keep this file beside the EXE.
+Its payload CRC32 is checked when loaded. It adds about 3.8 MiB on disk; transient
+factor storage is released when the calculation finishes. The table and selected
+marker require no recalculation during ordinary cursor movement.
+
+Known CIF Uiso or Biso values are honored. Missing/null displacement requires the
+visible **Unknown Uiso = 0 A^2** choice (enabled initially); the count of assumed
+source sites is reported. Anisotropic displacement metadata is rejected. Occupancy,
+fractional coordinates, unique labels and explicit element/ionic species must be
+present for every site. Supported symbol forms include C, Fe, Cu+, Cu2+ and O2-;
+indirect atom-type identifiers require conversion to explicit species. The parser
+requires one named data block, finite cell parameters and a consistent resolvable
+space group. Conflicting symmetry aliases are rejected.
+
+Gemmi's canonical per-source-site symmetry orbit uses a 0.4 A coincidence tolerance.
+This tool additionally verifies that every generated mate lies within 0.0001 A of
+a retained same-label mate. Ambiguous near-special positions are rejected; no
+coordinates are snapped or occupancy changed. Distinct source labels stay distinct.
+Low-precision coordinates may need correction or an explicitly expanded P1 CIF.
+
+Limits keep the XP calculation bounded: 2 MiB CIF, 2000 source sites, 192 symmetry
+operations, 10000 expanded atoms, 2 million candidate hkl, 100000 retained reflections
+and 50 million atom/reflection terms. Oversized requests fail with advice to reduce
+maximum 2theta; results are never truncated. Full factors support H through U,
+energy from 250 eV through the selected elements' Chantler table maximum, and
+`sin(theta)/wavelength <= 6 / A`. Maximum 2theta must be strictly between 0 and
+180 degrees. The 000 direct beam is excluded.
+
 ## Export and batch
 
 - **Native CSV/ASC matrix:** original-resolution values in native row order, with
@@ -201,10 +273,18 @@ dependencies beyond XP system DLLs; the accompanying runtime license notices bel
 beside the executable.
 
 ```powershell
-./build.ps1 -CompilerRoot C:/tools/llvm-mingw-xp-22.1.7-msvcrt-x86_64 -OutputDirectory C:/output/SLATE-OSC-XP
+./build.ps1 -CompilerRoot C:/tools/llvm-mingw-xp-22.1.7-msvcrt-x86_64 -GemmiRoot C:/tools/gemmi-0.7.5 -Python C:/project/.venv/Scripts/python.exe -OutputDirectory C:/output/SLATE-OSC-XP
 ```
 
 Build outputs must be external to the repository. The build uses strict warnings,
 SSE2 double arithmetic, no fast-math, static support libraries and PE subsystem 5.1.
 Inspect PE imports and exercise the GUI and batch executable before distribution.
 No persistent test/proof runner or generated binary is stored in this repository.
+
+Build-time additions: the unmodified Gemmi 0.7.5 source ZIP (SHA256
+`16c7d5dc414e4a1ca884688d0146cb5a39a571812a930f8a9f8436a6dd3ff525`), and a modern
+Python environment with NumPy, SciPy and XrayDB 4.5.8/database 9.2. The data exporter
+checks the database SHA256 before generating the offline table. Gemmi supplies the
+existing CIF/symmetry parser instead of a new partial CIF parser; its C++ runtime is
+statically linked. These dependencies are not installed on XP. See CIF-NOTICES.txt,
+Gemmi-LICENSE.txt and PEGTL-LICENSE.txt for source availability and licenses.

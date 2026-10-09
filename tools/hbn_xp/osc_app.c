@@ -124,6 +124,11 @@ static DWORD WINAPI worker_main(void *context) {
                                   &a->pending_integration, app_progress, a, a->error);
     else if (a->job == JOB_ANGLE_EXPORT)
         a->job_ok = analysis_export(a, a->job_path);
+    else if (a->job == JOB_CIF)
+        a->job_ok = cif_calculate(a->job_path, a->cif_data_path, a->cif_wavelength, a->cif_maximum,
+                                  a->cif_unknown_zero, &a->pending_cif, app_progress, a, a->error);
+    else if (a->job == JOB_CIF_EXPORT)
+        a->job_ok = cif_export(a, a->job_path);
     else
         a->job_ok = export_pixels(a, a->job_path, a->job == JOB_ASC, app_progress, a, a->error);
     PostMessageA(a->window, DONE_MESSAGE, 0, 0);
@@ -240,7 +245,7 @@ static void handle_command(App *a, int id, int notification) {
     }
     if (a->worker)
         return;
-    if (analysis_command(a, id, notification))
+    if (cif_command(a, id, notification) || analysis_command(a, id, notification))
         return;
     if (id >= FIELD && id < FIELD + 8 && notification == EN_CHANGE) {
         a->has_result = 0;
@@ -258,19 +263,23 @@ static void handle_command(App *a, int id, int notification) {
         return;
     }
     if (id == HELP_APP) {
-        message(a,
-                "Open an uncompressed R-AXIS OSC. Coordinates are clockwise detector-native, "
-                "with zero-based pixel centers.\r\n\r\nClick: row/column profiles. Drag: pan. "
-                "Wheel: zoom. Shift-drag: rectangular ROI. Numeric exports retain signed "
-                "original-resolution values; BMP includes mask shading but no curves or "
-                "profiles.\r\n\r\nhBN: open matching dark, verify geometry fields, then "
-                "Calculate. Dark scale is 1 (no exposure normalization). The preset assumes the "
-                "SLATE detector base and beam. Distance is calibrant-private. All five rings "
-                "must pass support/rank/residual checks.\r\n\r\nAnalysis: apply the fit or manual "
-                "geometry, verify Sample mm, then Integrate. The mouse tool selects angular "
-                "sectors or detector masks. Both profiles share the displayed angular limits. "
-                "Save/load applied geometry in File. Masks apply only to angular analysis. "
-                "See README for conventions and limits.");
+        message(
+            a,
+            "Open an uncompressed R-AXIS OSC. Coordinates are clockwise detector-native, "
+            "with zero-based pixel centers.\r\n\r\nClick: row/column profiles. Drag: pan. "
+            "Wheel: zoom. Shift-drag: rectangular ROI. Numeric exports retain signed "
+            "original-resolution values; BMP includes mask shading but no curves or "
+            "profiles.\r\n\r\nhBN: open matching dark, verify geometry fields, then "
+            "Calculate. Dark scale is 1 (no exposure normalization). The preset assumes the "
+            "SLATE detector base and beam. Distance is calibrant-private. All five rings "
+            "must pass support/rank/residual checks.\r\n\r\nAnalysis: apply the fit or manual "
+            "geometry, verify Sample mm, then Integrate. The mouse tool selects angular "
+            "sectors or detector masks. Both profiles share the displayed angular limits. "
+            "Save/load applied geometry in File. Masks apply only to angular analysis. "
+            "\r\n\r\nCIF: load a structure, set wavelength and maximum 2theta. The side table "
+            "shows signed hkl and raw |F|^2 in electrons squared. Select a row for a cyan "
+            "powder-position marker with matching applied geometry. Calculate after editing "
+            "inputs. Unknown Uiso=0 is an explicit choice. See README for conventions and limits.");
         return;
     }
     if (id == LOAD_SETTINGS) {
@@ -454,6 +463,7 @@ static void create_controls(App *a) {
         CreateWindowExA(WS_EX_CLIENTEDGE, "SlateOscCanvas", "", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
                         250, 8, 730, 672, a->window, NULL, a->instance, a);
     analysis_controls(a);
+    cif_controls(a);
     show_settings(a);
     SetWindowTextA(a->result_label,
                    "Load OSC for viewing.\r\n\r\nFor hBN, also load the matching dark and verify "
@@ -485,6 +495,8 @@ static LRESULT CALLBACK window_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_COMMAND:
         handle_command(a, LOWORD(wp), HIWORD(wp));
         return 0;
+    case WM_NOTIFY:
+        return cif_notify(a, (NMHDR *)lp);
     case STAGE_MESSAGE:
         if (a->worker)
             SetWindowTextA(a->stage_label, (const char *)lp);
@@ -533,6 +545,8 @@ static LRESULT CALLBACK window_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
             } else if (a->job == JOB_FIT) {
                 a->has_result = 1;
                 show_result(a);
+            } else if (a->job == JOB_CIF) {
+                cif_publish(a);
             } else if (a->job == JOB_ANGLES) {
                 osc_integration_free(&a->integration);
                 a->integration = a->pending_integration;
@@ -660,5 +674,7 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR command, int sh
     free(app.angle_bgr);
     osc_integration_free(&app.integration);
     osc_integration_free(&app.pending_integration);
+    cif_peaks_free(&app.cif);
+    cif_peaks_free(&app.pending_cif);
     return 0;
 }

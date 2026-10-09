@@ -23,7 +23,7 @@ void analysis_cursor(App *a, int c, int r) {
 void analysis_overlay(App *a, HDC dc) {
     int edge, i;
     HPEN pen, old;
-    if (!a->analysis_page || !analysis_ready(a))
+    if (a->analysis_page != PAGE_ANALYSIS || !analysis_ready(a))
         return;
     pen = CreatePen(PS_SOLID, 1, RGB(255, 220, 0));
     old = (HPEN)SelectObject(dc, pen);
@@ -70,7 +70,7 @@ static void select_end(App *a, double theta, double phi) {
 int analysis_detector_mouse(App *a, UINT msg, WPARAM wp, LPARAM lp) {
     int c, r;
     (void)wp;
-    if (!a->analysis_page || a->mouse_tool == TOOL_PAN || a->worker)
+    if (a->analysis_page != PAGE_ANALYSIS || a->mouse_tool == TOOL_PAN || a->worker)
         return 0;
     if (msg == WM_LBUTTONDOWN) {
         SetFocus(a->canvas);
@@ -284,6 +284,10 @@ static void angular_profile(App *a, HDC dc, RECT box, int phi) {
     TextOutA(dc, box.left + 6, box.bottom - 17, text, (int)strlen(text));
     SelectObject(dc, old);
     DeleteObject(pen);
+    if (!phi) {
+        RECT marker = {box.left + 6, box.top + 18, box.left + 6 + w, box.bottom - 20};
+        cif_angle_marker(a, dc, marker);
+    }
     free(v);
 }
 static void paint_angles(App *a, HDC dc, RECT bounds) {
@@ -342,6 +346,7 @@ static void paint_angles(App *a, HDC dc, RECT bounds) {
         }
         angular_profile(a, dc, left, 0);
         angular_profile(a, dc, right, 1);
+        cif_angle_marker(a, dc, p);
     }
     SelectObject(dc, old);
 }
@@ -377,7 +382,8 @@ LRESULT CALLBACK angle_canvas_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
         if (msg == WM_LBUTTONDOWN)
             SetFocus(w);
         if (plot_angle(a, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), &theta, &phi)) {
-            if (msg == WM_LBUTTONDOWN && a->mouse_tool == TOOL_SECTOR) {
+            if (msg == WM_LBUTTONDOWN && a->analysis_page == PAGE_ANALYSIS &&
+                a->mouse_tool == TOOL_SECTOR) {
                 a->angle_drag = 2;
                 a->drag_theta = theta;
                 a->drag_phi = phi;

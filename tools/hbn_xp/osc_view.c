@@ -257,6 +257,7 @@ static void paint_canvas(App *a, HDC dc, RECT bounds) {
         DeleteObject(pen);
     }
     analysis_overlay(a, dc);
+    cif_detector_overlay(a, dc);
     RestoreDC(dc, -1);
     {
         RECT h = {0, a->view_height + 4, a->view_width / 2, bounds.bottom},

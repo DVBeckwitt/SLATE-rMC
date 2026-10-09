@@ -7,12 +7,13 @@ int analysis_ready(const App *a) {
 void analysis_invalidate(App *a) {
     osc_integration_free(&a->integration);
     a->angle_color_dirty = 1;
-    if (a->analysis_page && a->result_label)
+    if (a->analysis_page == PAGE_ANALYSIS && a->result_label)
         SetWindowTextA(a->result_label, "Analysis inputs changed. Click Integrate to recompute.");
     if (a->angle_canvas)
         InvalidateRect(a->angle_canvas, NULL, FALSE);
     if (a->canvas)
         InvalidateRect(a->canvas, NULL, FALSE);
+    cif_status(a);
 }
 static void geometry_status(App *a) {
     const char *text = !a->geometry_valid   ? "Apply geometry to enable angles."
@@ -41,6 +42,7 @@ void analysis_layout(App *a) {
     MoveWindow(a->stage_label, 10, r.bottom - 26, r.right - 20, 22, TRUE);
     MoveWindow(a->result_label, 10, 530, 230, r.bottom > 570 ? r.bottom - 570 : 1, TRUE);
     a->angle_color_dirty = 1;
+    cif_layout(a);
 }
 void analysis_page(App *a, int enabled) {
     HWND child = GetWindow(a->window, GW_CHILD);
@@ -48,20 +50,29 @@ void analysis_page(App *a, int enabled) {
     if (GetCapture() == a->canvas || GetCapture() == a->angle_canvas)
         ReleaseCapture();
     a->analysis_page = enabled;
+    a->pick_center = 0;
+    SetWindowTextA(GetDlgItem(a->window, PICK_CENTER), "Pick initial center");
     while (child) {
         int id = GetDlgCtrlID(child);
         if ((id >= FIELD && id < FIELD + 8) || id == PICK_CENTER || id == CALIBRATE ||
             (id >= HBN_LABEL && id < HBN_LABEL + 10))
-            ShowWindow(child, enabled ? SW_HIDE : SW_SHOW);
+            ShowWindow(child, enabled == PAGE_HBN ? SW_SHOW : SW_HIDE);
         else if (id >= APPLIED_GEOMETRY && id < ANALYSIS_LABEL + 40)
-            ShowWindow(child, enabled ? SW_SHOW : SW_HIDE);
+            ShowWindow(child, enabled == PAGE_ANALYSIS ? SW_SHOW : SW_HIDE);
+        else if (id >= CIF_OPEN && id < CIF_END)
+            ShowWindow(child, enabled == PAGE_CIF ? SW_SHOW : SW_HIDE);
         child = GetWindow(child, GW_HWNDNEXT);
     }
     analysis_layout(a);
     if (changed)
         fit_view(a);
     geometry_status(a);
-    if (enabled) {
+    ShowWindow(a->result_label, enabled == PAGE_CIF ? SW_HIDE : SW_SHOW);
+    SendMessageA(GetDlgItem(a->window, CIF_VIEW), CB_SETCURSEL, a->view_mode, 0);
+    cif_status(a);
+    if (enabled == PAGE_CIF)
+        return;
+    if (enabled == PAGE_ANALYSIS) {
         if (a->integration.signal)
             analysis_publish(a);
         else
@@ -90,8 +101,8 @@ void analysis_controls(App *a) {
     int i;
     const char *labels[] = {"Sample mm", "2theta deg", "Phi deg",       "Bin width deg",
                             "View",      "Mouse tool", "Map / profiles"};
-    control(a, "BUTTON", "Analysis", WS_TABSTOP, ANALYSIS_PAGE, 10, 174, 86, 26);
-    control(a, "BUTTON", "hBN", WS_TABSTOP, CALIBRATION_PAGE, 102, 174, 68, 26);
+    control(a, "BUTTON", "Analysis", WS_TABSTOP, ANALYSIS_PAGE, 10, 174, 64, 26);
+    control(a, "BUTTON", "hBN", WS_TABSTOP, CALIBRATION_PAGE, 80, 174, 40, 26);
     control(a, "STATIC", "Apply geometry to enable angles.", 0, APPLIED_GEOMETRY, 10, 204, 230, 20);
     control(a, "BUTTON", "Apply inputs", WS_TABSTOP, APPLY_INPUTS, 10, 226, 108, 25);
     control(a, "BUTTON", "Use hBN fit", WS_TABSTOP, APPLY_HBN, 124, 226, 116, 25);
