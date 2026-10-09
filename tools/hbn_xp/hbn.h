@@ -45,6 +45,8 @@ int hbn_fit_points(const HbnSettings *settings, int rows, int columns, HbnResult
                    HbnProgress progress, void *context, char error[256]);
 void hbn_curve(const HbnSettings *settings, const double values[5], int ring, double azimuth,
                double *column, double *row);
+void hbn_detector_axes(const double values[5], double beam_axis[3], double column_axis[3],
+                       double row_axis[3]);
 int hbn_report(FILE *stream, const HbnSettings *settings, const HbnImage *image,
                const HbnResult *result);
 double hbn_detection_pixel(const HbnImage *image, int column, int row);

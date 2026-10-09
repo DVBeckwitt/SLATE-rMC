@@ -19,10 +19,10 @@ Add no parallel fitting or physics pipeline.
 
 ## Quick start
 
-For the standalone Windows XP OSC viewer and hBN detector calibrator, see
+For the standalone Windows XP OSC viewer, hBN detector calibrator and angular integrator, see
 [SLATE OSC + hBN](tools/hbn_xp/README.md). This narrow native compatibility port
-provides image inspection, signed data export and hBN geometry calibration without
-Python. The current Python hBN implementation remains the scientific authority;
+provides image inspection, signed data export, hBN geometry calibration and linked
+phi/2theta integration without Python. The Python scientific implementations remain authoritative;
 the XP executable has a fixed detector base/beam and no crystal fitting pipeline.
 
 Python 3.12 or 3.13 is required.

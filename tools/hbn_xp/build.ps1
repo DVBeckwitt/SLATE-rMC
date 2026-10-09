@@ -17,6 +17,9 @@ $arguments = @(
     '-msse2', '-mfpmath=sse', '-ffp-contract=off', '-static', '-mwindows',
     (Join-Path $PSScriptRoot 'hbn_core.c'), (Join-Path $PSScriptRoot 'hbn_io.c'),
     (Join-Path $PSScriptRoot 'osc_app.c'),
+    (Join-Path $PSScriptRoot 'osc_view.c'), (Join-Path $PSScriptRoot 'osc_output.c'),
+    (Join-Path $PSScriptRoot 'osc_analysis.c'), (Join-Path $PSScriptRoot 'osc_analysis_io.c'),
+    (Join-Path $PSScriptRoot 'osc_analysis_ui.c'), (Join-Path $PSScriptRoot 'osc_angle_view.c'),
     '-Wl,--subsystem,windows:5.1', '-Wl,--major-os-version,5', '-Wl,--minor-os-version,1',
     '-Wl,--no-insert-timestamp', '-Wl,--strip-all', '-lcomdlg32', '-lgdi32', '-luser32', '-lm',
     '-o', (Join-Path $destination 'SLATE-OSC-XP.exe')

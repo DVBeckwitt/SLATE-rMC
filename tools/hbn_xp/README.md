@@ -1,6 +1,7 @@
 # SLATE OSC + hBN for Windows XP
 
-A portable native Win32 viewer and hBN detector calibrator. Run `SLATE-OSC-XP.exe`.
+A portable native Win32 viewer, hBN detector calibrator and angular integrator.
+Run `SLATE-OSC-XP.exe`.
 No Python, Qt, installation, network connection or GPU is required. Target: 32-bit
 Windows XP on an SSE2-capable processor (Pentium 4 or later). Use a 1024 by 768 or
 larger display. Allow memory for 36 MB per 3000 by 3000 source/dark image, display
@@ -13,6 +14,9 @@ EXE. The distribution includes `demo/hBN_calibrant_5m.osc` and `demo/darkImg.osc
 With these files and the built-in preset, Calculate hBN should report QUALIFIED,
 column/row tilts about `-0.383836 / -1.344322 deg`, beam center
 `(1452.694443,1596.706498) px` and calibrant distance `75.966066 mm`.
+The packaged `demo/hBN_analysis_geometry.csv` is the applied geometry from that
+example. Load it through File for a quick angular-analysis demonstration; it is
+specific to the supplied calibrant at its measured position.
 
 ## Viewing
 
@@ -77,14 +81,76 @@ bounds, at least eight points and 0.15 angular coverage on each of five rings, a
 every ring RMS at most 2.5 px. Bounds are +/-0.15 radians, an on-panel center, and
 distance 40-120 mm. Solver convergence alone is insufficient. Green curves are
 qualified, orange unqualified, and red points are the retained measured selections.
-Inspect the overlay. No user exclusion-mask editor is included in this version.
+Inspect the overlay. The analysis mask does not change hBN ring detection.
 Reports preserve unqualified status, bounds and conditional standard errors; those
 errors are not calibrated physical confidence intervals.
 
 Loading a new source/dark or changing geometry invalidates the old calibration.
-Long reads, fitting and full-matrix exports use one cancelable worker. Controls are
+Long reads, fitting, angular integration and numeric exports use one cancelable worker. Controls are
 locked during those operations to prevent stale results; Close requests cancellation.
 Preview preparation and small profile/ROI operations are synchronous.
+
+## Angular analysis
+
+1. Calculate hBN, then choose **Analysis > Use hBN fit**. This explicitly applies
+   the qualified detector pose and calibrant distance. If the sample is elsewhere,
+   enter its beam-direction distance in **Sample mm** and click **Apply**. The hBN
+   distance alone does not establish the sample position. Alternatively, enter
+   manual geometry on the hBN page and choose **Analysis > Apply inputs**.
+2. Choose **Detector**, **Phi vs 2theta**, or **Side by side**. Hover on the detector
+   for native column/row, signed counts, 2theta and phi. The angular-map cursor shows
+   angles and the corresponding continuous detector position. Phi is undefined at
+   the direct beam. All angle controls use degrees.
+3. Set 2theta and phi limits and their requested bin widths, then **Integrate**.
+   The map and both profiles share these limits: I(2theta) integrates over phi;
+   I(phi) integrates over 2theta. Bin counts round upward, with equal bin widths
+   adjusted to fit the exact limits. **Full range** resets to 0..80 degrees and
+   -180..180 degrees; click Integrate to recompute. At most 4096 radial bins, 1440
+   azimuthal bins and 1,048,576 total bins are admitted. Actual widths must be at
+   least 1e-7 radians (about 0.00000573 degrees).
+4. Select **Angular sector** as the mouse tool. Drag in detector space between two
+   angular corners to select an annular sector, or drag a rectangle on the angular
+   map. Releasing recomputes the map and profiles. Detector dragging chooses the
+   shorter phi arc (at most 180 degrees); use the fields or angular map for wider
+   sectors. A phi end below the start crosses the seam: 170 to -170 means 20 degrees.
+5. **Mask rectangle** and **Unmask rectangle** operate on full detector pixels.
+   Masked pixels are shaded red. Click Integrate after changing the mask. **Clear
+   mask** removes all exclusions. Masks affect angular analysis only; native matrix,
+   row/column profiles, ROI measurements and hBN ring detection retain their original
+   behavior. A new source clears the mask; masks are not saved in geometry files.
+6. **Map / profiles** selects total signed counts, mean counts, or valid pixel area.
+   Missing bins have no valid mean; gray marks missing support, red marks bins whose
+   available panel support is entirely masked. Profiles reduce signal and area first,
+   then divide for means. Coverage means effective detector pixels, not a percentage
+   of a complete ring. The map uses nearest-bin display sampling; profiles use a
+   min/max envelope. Display settings never change integration values.
+7. **File > Save analysis geometry** and **Load analysis geometry** preserve the
+   applied pose, sample distance, dimensions, pitches, wavelength and calibration
+   provenance. A geometry remains available when opening another same-size image;
+   verify that the instrument configuration and sample position still match.
+   Editing hBN seeds does not silently modify applied analysis geometry.
+
+Phi is scattering azimuth, not a sample motor angle. The frame uses the incident
+beam and the detector column axis projected perpendicular to it. In an untilted
+native view phi is zero upward, positive toward the left, and wrapped to [-180,180).
+Tilted-detector readout and inverse overlays use this same frame and the full pose.
+
+The C projector follows `measurement/angle_space.py:compile_detector_angle_projector`
+and the detector-oriented AngleFrame in `selection/osc_series.py`. It maps physical
+pixel corners, divides ordinary pixels along the top-left/bottom-right diagonal,
+and clips those angular triangles into bins. Beam-pole pixels use physical-edge
+fans; azimuthal seams are unwrapped before clipping. Weights use the full pixel's
+angular polygon area. Cropped support is not renormalized. This is the accepted
+corner-polygon approximation, not exact integration of a continuously curved pixel.
+For each bin, S=sum(weight*count), N=sum(weight for unmasked pixels), and P=sum(weight
+before masking). Means are S/N; N/P is the valid fraction of the available panel
+support. No solid-angle, polarization, exposure or background correction is applied.
+Signed raw-dark values are preserved, including negative measurements.
+
+The integrator streams two rows of corner coordinates and keeps three double arrays
+for bins. The default 800 by 360 grid adds about 6.6 MiB, plus about 1.1 MiB for a
+3000 by 3000 mask when used. Moving the cursor computes only its coordinate transform.
+Integration runs on demand; slower XP hardware remains responsive to Cancel.
 
 ## Export and batch
 
@@ -95,9 +161,15 @@ Preview preparation and small profile/ROI operations are synchronous.
 - **Profiles and ROI:** full-resolution selected row and column, with axis labels,
   pixel-center coordinates, source fingerprints and optional signed ROI statistics.
 - **Visible view BMP:** the currently rendered viewport, including its crop/contrast,
-  without curve, cursor, ROI or profile overlays. This is a display image, not counts.
+  and mask shading, without curve, cursor, ROI or profile overlays. This is a display
+  image, not counts.
 - **Save hBN calibration:** parameters, units, seeds, qualification, per-ring metrics,
   conditional errors, source CRC32, retained observations and residuals in one CSV.
+- **Export angles:** one CSV containing geometry/provenance, the complete angular
+  map, I(2theta), and I(phi), identified by the `kind` column. Each row records angle
+  bounds, S, N, P, mean and valid fraction. Blank means/fractions indicate missing
+  support. Full input, masked and outside-window totals make count accounting
+  explicit. The current mask has a CRC32 fingerprint; its bitmap is not embedded.
 
 Outputs stage to a temporary file and replace their destination only after a complete
 write. The GUI asks before overwriting. OSC and INI extensions cannot be export targets.
@@ -113,8 +185,8 @@ Exit codes: 0 qualified result saved, 3 unqualified result saved, 2 input/calcul
 output failure. Batch explicitly replaces the requested CSV. No file is written on
 calculation failure. Passing a single OSC filename instead opens it in the viewer.
 
-Angle/q-space rebinning and the old viewer's additional analysis tools are outside
-this version. They need separate geometry, measure and conservation checks.
+Reciprocal-space rebinning, intensity corrections and background fitting are outside
+this version.
 
 ## Build on a modern development computer
 

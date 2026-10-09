@@ -39,9 +39,8 @@ invalid:
     return 0;
 }
 
-void hbn_curve(const HbnSettings *s, const double x[5], int ring, double phi, double *c,
-               double *r) {
-    double b[3], u[3], v[3], t[3], norm, along, theta = angle(s, ring);
+void hbn_detector_axes(const double x[5], double b[3], double u[3], double v[3]) {
+    double norm;
     int j;
     beam(x, b);
     for (j = 0; j < 3; ++j)
@@ -52,6 +51,12 @@ void hbn_curve(const HbnSettings *s, const double x[5], int ring, double phi, do
     v[0] = b[1] * u[2] - b[2] * u[1];
     v[1] = b[2] * u[0] - b[0] * u[2];
     v[2] = b[0] * u[1] - b[1] * u[0];
+}
+void hbn_curve(const HbnSettings *s, const double x[5], int ring, double phi, double *c,
+               double *r) {
+    double b[3], u[3], v[3], t[3], along, theta = angle(s, ring);
+    int j;
+    hbn_detector_axes(x, b, u, v);
     for (j = 0; j < 3; ++j)
         t[j] = cos(theta) * b[j] + sin(theta) * (u[j] * cos(phi) + v[j] * sin(phi));
     along = x[4] * b[2] / t[2];
