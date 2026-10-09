@@ -346,7 +346,7 @@ static void paint_angles(App *a, HDC dc, RECT bounds) {
         }
         angular_profile(a, dc, left, 0);
         angular_profile(a, dc, right, 1);
-        cif_angle_marker(a, dc, p);
+        cif_angle_overlay(a, dc, p);
     }
     SelectObject(dc, old);
 }

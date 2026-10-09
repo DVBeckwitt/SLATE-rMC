@@ -5,6 +5,7 @@
 #include <windowsx.h>
 #include "osc_analysis.h"
 #include "cif_peaks.h"
+#include "cif_guides.h"
 #include <commdlg.h>
 #include <commctrl.h>
 #include <float.h>
@@ -55,6 +56,10 @@ enum {
 };
 #define DONE_MESSAGE (WM_APP + 1)
 #define STAGE_MESSAGE (WM_APP + 2)
+typedef struct {
+    int group;
+    double angle, intensity;
+} CifDisplayRow;
 
 typedef struct {
     HWND window, canvas, result_label, stage_label;
@@ -91,6 +96,14 @@ typedef struct {
     int cif_loaded, cif_selected, cif_dirty, cif_unknown_zero, updating_cif;
     double cif_wavelength, cif_maximum;
     char cif_path[MAX_PATH], cif_data_path[MAX_PATH];
+    int cif_kind, cif_labels, cif_overlay, cif_mount_applied, cif_mount_dirty, cif_sort_intensity;
+    int guide_attempted, guide_rods;
+    CifMount cif_mount;
+    CifGuides guides;
+    OscGeometry guide_geometry;
+    CifGuideView guide_view;
+    char guide_error[256];
+    CifDisplayRow *cif_rows;
 } App;
 
 enum {
@@ -133,9 +146,15 @@ enum {
     CIF_STATUS,
     CIF_VIEW,
     CIF_SORT,
-    CIF_CLEAR,
-    CIF_LABEL = 620,
-    CIF_END = 630
+    CIF_OVERLAY,
+    CIF_LABELS,
+    CIF_INCIDENCE,
+    CIF_NORMAL_PHI,
+    CIF_MOUNT,
+    CIF_KIND,
+    CIF_MEMBERS,
+    CIF_LABEL = 640,
+    CIF_END = 650
 };
 enum { VIEW_DETECTOR, VIEW_ANGLES, VIEW_SPLIT };
 enum { TOOL_PAN, TOOL_SECTOR, TOOL_MASK, TOOL_UNMASK };
@@ -184,8 +203,11 @@ int cif_command(App *a, int id, int notification);
 LRESULT cif_notify(App *a, NMHDR *header);
 void cif_publish(App *a);
 int cif_export(App *a, const char *path);
-const CifPeak *cif_selected_peak(const App *a);
+int cif_guides_ready(const App *a);
+int cif_prepare_guides(App *a);
+void cif_group_label(const App *a, int kind, int group, char *text, size_t capacity);
 void cif_detector_overlay(App *a, HDC dc);
 void cif_angle_marker(App *a, HDC dc, RECT bounds);
+void cif_angle_overlay(App *a, HDC dc, RECT bounds);
 
 #endif

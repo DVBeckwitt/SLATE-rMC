@@ -264,22 +264,26 @@ static void handle_command(App *a, int id, int notification) {
     }
     if (id == HELP_APP) {
         message(
-            a,
-            "Open an uncompressed R-AXIS OSC. Coordinates are clockwise detector-native, "
-            "with zero-based pixel centers.\r\n\r\nClick: row/column profiles. Drag: pan. "
-            "Wheel: zoom. Shift-drag: rectangular ROI. Numeric exports retain signed "
-            "original-resolution values; BMP includes mask shading but no curves or "
-            "profiles.\r\n\r\nhBN: open matching dark, verify geometry fields, then "
-            "Calculate. Dark scale is 1 (no exposure normalization). The preset assumes the "
-            "SLATE detector base and beam. Distance is calibrant-private. All five rings "
-            "must pass support/rank/residual checks.\r\n\r\nAnalysis: apply the fit or manual "
-            "geometry, verify Sample mm, then Integrate. The mouse tool selects angular "
-            "sectors or detector masks. Both profiles share the displayed angular limits. "
-            "Save/load applied geometry in File. Masks apply only to angular analysis. "
-            "\r\n\r\nCIF: load a structure, set wavelength and maximum 2theta. The side table "
-            "shows signed hkl and raw |F|^2 in electrons squared. Select a row for a cyan "
-            "powder-position marker with matching applied geometry. Calculate after editing "
-            "inputs. Unknown Uiso=0 is an explicit choice. See README for conventions and limits.");
+            a, "Open an uncompressed R-AXIS OSC. Coordinates are clockwise detector-native, "
+               "with zero-based pixel centers.\r\n\r\nClick: row/column profiles. Drag: pan. "
+               "Wheel: zoom. Shift-drag: rectangular ROI. Numeric exports retain signed "
+               "original-resolution values; BMP includes mask shading but no curves or "
+               "profiles.\r\n\r\nhBN: open matching dark, verify geometry fields, then "
+               "Calculate. Dark scale is 1 (no exposure normalization). The preset assumes the "
+               "SLATE detector base and beam. Distance is calibrant-private. All five rings "
+               "must pass support/rank/residual checks.\r\n\r\nAnalysis: apply the fit or manual "
+               "geometry, verify Sample mm, then Integrate. The mouse tool selects angular "
+               "sectors or detector masks. Both profiles share the displayed angular limits. "
+               "Save/load applied geometry in File. Masks apply only to angular analysis. "
+               "\r\n\r\nCIF: set wavelength / maximum 2theta and load a structure. Guides shows "
+               "powder arcs or Qz rods with HKL ticks. For rods, enter sample incidence and normal "
+               "phi (0 up, +90 left), then Apply a1/a2 fiber: b3 is the surface normal, full fiber "
+               "rotation, air geometry without refraction. P/R/T tables group equal angle / rod / "
+               "tick positions. Select a group for cyan highlighting and every signed HKL with "
+               "its own raw |F|^2 below. +N means additional members; table max is not a sum. "
+               "Labels can be hidden independently of guides. Calculate after editing CIF inputs; "
+               "apply edited mounting. Unknown Uiso=0 is explicit. See README for conventions and "
+               "limits.");
         return;
     }
     if (id == LOAD_SETTINGS) {
@@ -676,5 +680,7 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR command, int sh
     osc_integration_free(&app.pending_integration);
     cif_peaks_free(&app.cif);
     cif_peaks_free(&app.pending_cif);
+    cif_guides_free(&app.guides);
+    free(app.cif_rows);
     return 0;
 }

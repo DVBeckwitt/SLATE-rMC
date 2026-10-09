@@ -161,24 +161,73 @@ Integration runs on demand; slower XP hardware remains responsive to Cancel.
    wavelength; click **Calculate** after changing inputs. The CIF's own wavelength
    is not substituted for the measurement wavelength. A CIF can be calculated
    before opening an OSC.
-2. The side table lists every signed **h k l**, **2theta deg**, and **raw |F|^2**
-   in electrons squared, including systematic extinctions. Use **Sort by intensity**
-   to bring the strongest entries to the top, or sort back by angle. Friedel mates
-   and other coincident reflections stay separate; there is no strength cutoff.
-3. Select a row with the mouse or arrow keys. A cyan curve marks that 2theta on
-   the detector; a vertical line marks it on the angular map and I(2theta) profile.
-   **View** selects detector, angular or split view while retaining the side table.
-   Angular views require an existing integration. Markers require applied matching
-   image geometry and wavelength (relative agreement 1e-10); edited inputs hide
-   markers until recalculated. **Clear mark** removes the selected reference.
-4. **Export peaks** saves hkl, d-spacing, 2theta, complex F, raw |F|^2, wavelength,
-   source/data CRC32, atom counts and factor mappings. Failed or canceled loads
-   preserve the previous table. Edited inputs must be recalculated before export.
+2. **Guides > Powder 2theta arcs** draws every distinct Bragg angle along phi.
+   **Arcs + Qz rods / L ticks** adds orange constant-Qr rods and yellow HKL ticks.
+   Set **Inc deg** (sample incidence) and **N phi deg** (transverse sample-normal
+   direction), then **Apply a1/a2 fiber**. This explicitly declares that direct
+   a1/a2 lie in the sample surface, b3 is the texture normal, and crystallites may
+   rotate through the full fiber azimuth. Positive incidence means the beam enters
+   that surface; normal phi 0 points up and +90 points left in the angle frame.
+   These are measurement inputs, not values inferred from the CIF or hBN fit.
+   Incidence must be strictly within +/-89 degrees; normal phi within +/-180.
+   Mounting is session-only; enter/apply it again after restarting the program.
+3. **View** selects detector, angular or split view. Both images use the same
+   physical outgoing rays and applied detector pose. Angular views need an existing
+   integration. I(2theta) shows only the powder-angle lines. Guides need matching
+   applied image geometry and wavelength (relative agreement 1e-10). Edited CIF
+   inputs hide guides until recalculated; edited mounting hides oriented guides
+   until applied. **Guides > Off** and **Labels** control display independently.
+4. The upper side table switches between **P: 2theta groups**, **R: Qz rod groups**,
+   and **T: HKL tick groups**. Each coincident contour is drawn once. A label such
+   as `T12 (1 0 3) +5` means five additional HKLs in that group. Select a group with
+   the mouse or arrow keys: its guide turns cyan and the lower table lists every
+   signed HKL, 2theta and individual raw |F|^2 in electrons squared. The upper
+   table's **max |F|^2** is the largest individual member, not a sum. **By strength**
+   sorts these maxima; **By position** restores angle order (Qr order for rods).
+   R labels use literal `L` because that line spans continuous L; R membership
+   includes different L values along the same rod. P and T groups differ: equal
+   powder angle does not imply equal Qr,Qz. Systematic extinctions and Friedel
+   mates remain in the tables and CSV; no strength cutoff is applied.
+5. Labels avoid each other; if the view is crowded, a visible count reports labels
+   hidden for overlap. The lines and complete member tables remain. In oriented
+   mode labels prioritize rods and HKL ticks; select a P group to label its arc.
+   Zoom or use the group table to inspect crowded reflections.
+6. **Export peaks** saves every signed HKL, d, 2theta, complex F, raw |F|^2, Qr/Qz,
+   P/R/T group IDs, wavelength, source/data CRC32, atom counts and factor mappings.
+   Its header records the applied mounting and whether mounting inputs were edited.
+   Failed/canceled loads preserve the previous table. Recalculate edited CIF inputs
+   before export. Group IDs are local to that CIF and reflection range.
 
-These are powder-position guides for visual comparison, not oriented-crystal spot
-predictions. Raw |F|^2 alone does not predict measured counts. No multiplicity,
+The oriented guides use external-air kinematic geometry, without refraction,
+mosaic spread or an oriented single-crystal azimuth model. A 00L tick is physically
+accessible only at its specular Ewald condition; an arbitrary 00L powder ring does
+not imply an oriented 00L spot at the current incidence. Negative Qz and both
+physical Ewald roots are retained. The axial (0,0) rod intersects the elastic
+sphere at one nonzero point, shown with an R label at `2theta=2*|incidence|`;
+it is not an integer-L tick unless that Bragg condition is met. The direct beam
+is excluded. No changes are made to the measured image.
+Raw |F|^2 alone does not predict measured counts. No multiplicity,
 relative normalization, Lorentz/polarization, absorption, electron-radius factor,
 detector solid-angle or intensity correction is applied.
+
+For a general cell, `B=2*pi*A^-T`, `n_c=b3/|b3|`, `Qz=(B*hkl).n_c`, and
+`Qr=|B*(h,k,0) - n_c*(B*(h,k,0)).n_c|`. Qz therefore includes h/k offsets;
+`2*pi*L/c` is not substituted for an oblique cell. P groups compare `1/d^2`,
+R groups compare `Qr^2`, and T groups compare Qz within one R group. Coincidence
+uses a fixed anchor and `512*DBL_EPSILON*max(1,abs(a),abs(b))` in those quantities,
+not screen resolution or a chained tolerance. The exact axial rod remains separate
+from small nonzero-Qr rods. Grouping never combines amplitudes or intensities.
+
+With `k=2*pi/lambda`, incidence alpha, beam b, sample normal n, tangent
+`t=(b+sin(alpha)*n)/cos(alpha)` and `v=n cross t`, a rod has
+`q=x*t +/- sqrt(Qr^2-x^2)*v + Qz*n`, where
+`x=(2*k*sin(alpha)*Qz-Qr^2-Qz^2)/(2*k*cos(alpha))`.
+Only real elastic roots and forward detector intersections are drawn. A shared
+cache projects these rays into both image spaces, splitting invalid paths and phi
+seams. It refines the curve for the current zoom/range (midpoint targets 0.3 detector
+screen pixels and 0.2 pixels per angular axis); changing view scale rebuilds it.
+Limits are 250000 points, 20000 paths and 18 subdivision levels. Exceeding a limit
+hides the image guides with an explicit message; the full peak tables remain.
 
 The compatibility port follows `materials/crystal.py`, `materials/optics.py` and
 `ordered/amplitudes.py`. Gemmi 0.7.5 parses and expands the CIF once. For each signed
@@ -198,8 +247,8 @@ in the status and CSV. Anomalous factors use the element. CIF dispersion values
 are not used. Each f' interval preserves the main program's local seven-knot cubic
 interpolation; f'' uses log-log linear interpolation. Keep this file beside the EXE.
 Its payload CRC32 is checked when loaded. It adds about 3.8 MiB on disk; transient
-factor storage is released when the calculation finishes. The table and selected
-marker require no recalculation during ordinary cursor movement.
+factor storage is released when the calculation finishes. Grouping and the curve
+cache require no recalculation during ordinary cursor movement.
 
 Known CIF Uiso or Biso values are honored. Missing/null displacement requires the
 visible **Unknown Uiso = 0 A^2** choice (enabled initially); the count of assumed

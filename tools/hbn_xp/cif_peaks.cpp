@@ -7,7 +7,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <memory>
+#include <numeric>
 #include <set>
 #include <stdexcept>
 #include <vector>
@@ -298,6 +300,9 @@ std::vector<CifPeak> reflections(const gemmi::UnitCell &cell, double wavelength,
     }
     require(candidates <= 2000000, "More than 2000000 candidate hkl. Reduce maximum 2theta.");
     std::vector<CifPeak> peaks;
+    // B = 2*pi*A^-T; b3 is the normal to the direct a1/a2 surface.
+    auto reciprocal = cell.frac.mat.transpose();
+    auto normal = reciprocal.column_copy(2).normalized();
     for (int h = -limit[0]; h <= limit[0]; ++h) {
         check(progress, context);
         for (int k = -limit[1]; k <= limit[1]; ++k)
@@ -311,7 +316,10 @@ std::vector<CifPeak> reflections(const gemmi::UnitCell &cell, double wavelength,
                     continue;
                 double d = 1 / std::sqrt(reciprocal_sq);
                 double angle = 2 * std::asin(std::min(1.0, wavelength / (2 * d))) * 180 / pi;
-                peaks.push_back({h, k, l, d, angle, 0, 0, 0});
+                auto hk = reciprocal.multiply(gemmi::Vec3(h, k, 0)) * (2 * pi);
+                auto g = reciprocal.multiply(gemmi::Vec3(h, k, l)) * (2 * pi);
+                double qr = (hk - normal * hk.dot(normal)).length();
+                peaks.push_back({h, k, l, d, angle, 0, 0, 0, qr, g.dot(normal), {0, 0, 0}});
                 require(peaks.size() <= 100000 && peaks.size() * atom_count <= 50000000,
                         "Calculation exceeds 100000 reflections or 50000000 atom terms. Reduce "
                         "maximum 2theta.");
@@ -328,16 +336,65 @@ std::vector<CifPeak> reflections(const gemmi::UnitCell &cell, double wavelength,
     });
     return peaks;
 }
+// Numerical metric coincidences, not a pixel-distance or intensity threshold.
+bool coincident(double a, double b) {
+    return std::abs(a - b) <=
+           512 * std::numeric_limits<double>::epsilon() * std::max({1.0, std::abs(a), std::abs(b)});
+}
+void group_peaks(std::vector<CifPeak> &peaks, CifPeaks &result, int kind) {
+    std::vector<int> members(peaks.size());
+    std::iota(members.begin(), members.end(), 0);
+    auto key = [&](int i) {
+        const auto &p = peaks[i];
+        return kind == CIF_POWDER ? 1 / (p.d_A * p.d_A)
+               : kind == CIF_ROD  ? p.qr_invA * p.qr_invA
+                                  : p.qz_invA;
+    };
+    std::sort(members.begin(), members.end(), [&](int i, int j) {
+        if (kind == CIF_TICK && peaks[i].group[CIF_ROD] != peaks[j].group[CIF_ROD])
+            return peaks[i].group[CIF_ROD] < peaks[j].group[CIF_ROD];
+        return key(i) == key(j) ? i < j : key(i) < key(j);
+    });
+    std::vector<CifGroup> groups;
+    for (size_t begin = 0; begin < members.size();) {
+        size_t end = begin + 1;
+        int anchor = members[begin];
+        while (end < members.size() && coincident(key(anchor), key(members[end])) &&
+               (kind != CIF_ROD || ((peaks[anchor].h == 0 && peaks[anchor].k == 0) ==
+                                    (peaks[members[end]].h == 0 && peaks[members[end]].k == 0))) &&
+               (kind != CIF_TICK ||
+                peaks[anchor].group[CIF_ROD] == peaks[members[end]].group[CIF_ROD]))
+            ++end;
+        std::sort(members.begin() + begin, members.begin() + end);
+        CifGroup group{static_cast<int>(begin), static_cast<int>(end - begin), 0};
+        for (size_t m = begin; m < end; ++m) {
+            auto &p = peaks[members[m]];
+            p.group[kind] = static_cast<int>(groups.size());
+            group.maximum_intensity_e2 = std::max(group.maximum_intensity_e2, p.intensity_e2);
+        }
+        groups.push_back(group);
+        begin = end;
+    }
+    auto &out = result.grouping[kind];
+    out.groups = static_cast<CifGroup *>(malloc(groups.size() * sizeof(CifGroup)));
+    out.members = static_cast<int *>(malloc(members.size() * sizeof(int)));
+    require(groups.empty() || (out.groups && out.members), "Not enough memory for CIF groups.");
+    if (!groups.empty()) {
+        memcpy(out.groups, groups.data(), groups.size() * sizeof(CifGroup));
+        memcpy(out.members, members.data(), members.size() * sizeof(int));
+    }
+    out.count = static_cast<int>(groups.size());
+}
 } // namespace
 
 extern "C" int cif_calculate(const char *path, const char *data_path, double wavelength,
                              double maximum, int unknown_zero, CifPeaks *output,
                              CifProgress progress, void *context, char error[256]) {
+    CifPeaks result{};
     try {
         require(std::isfinite(wavelength) && wavelength > 0 && std::isfinite(maximum) &&
                     maximum > 0 && maximum < 180,
                 "Use positive wavelength and maximum 2theta strictly between 0 and 180 degrees.");
-        CifPeaks result{};
         result.wavelength_A = wavelength;
         result.max_two_theta_deg = maximum;
         auto source = read_bytes(path, 2 * 1024 * 1024);
@@ -379,6 +436,8 @@ extern "C" int cif_calculate(const char *path, const char *data_path, double wav
             require(std::isfinite(peak.intensity_e2), "Nonfinite structure factor.");
         }
         check(progress, context);
+        for (int kind : {CIF_POWDER, CIF_ROD, CIF_TICK})
+            group_peaks(peaks, result, kind);
         if (!peaks.empty()) {
             result.peaks = static_cast<CifPeak *>(malloc(peaks.size() * sizeof(CifPeak)));
             require(result.peaks != nullptr, "Not enough memory for CIF reflections.");
@@ -390,15 +449,21 @@ extern "C" int cif_calculate(const char *path, const char *data_path, double wav
         error[0] = 0;
         return 1;
     } catch (const std::exception &e) {
+        cif_peaks_free(&result);
         snprintf(error, 256, "%s", e.what());
         return 0;
     } catch (...) {
+        cif_peaks_free(&result);
         snprintf(error, 256, "CIF calculation failed.");
         return 0;
     }
 }
 extern "C" void cif_peaks_free(CifPeaks *result) {
     free(result->peaks);
+    for (auto &grouping : result->grouping) {
+        free(grouping.groups);
+        free(grouping.members);
+    }
     memset(result, 0, sizeof *result);
 }
 extern "C" int cif_peaks_write(FILE *stream, const CifPeaks *result, CifProgress progress,
@@ -412,15 +477,19 @@ extern "C" int cif_peaks_write(FILE *stream, const CifPeaks *result, CifProgress
         "# wavelength_A=%.17g,max_two_theta_deg=%.17g,source_crc32=%08lx,data_crc32=%08lx\n"
         "# source_sites=%d,expanded_sites=%d,unknown_Uiso_set_to_zero=%d\n"
         "# elastic_species=%s; anomalous factors use element; CIF dispersion values are not used\n"
-        "h,k,l,d_A,two_theta_deg,F_real_e,F_imag_e,raw_SF_intensity_e2\n",
+        "# Groups P=1/d^2, R=Qr^2, T=(R,Qz); anchor tolerance 512*epsilon*max(1,abs(a),abs(b))\n"
+        "# Qr,Qz use b3 as normal to direct a1/a2; group IDs are local to this CIF/range\n"
+        "h,k,l,d_A,two_theta_deg,F_real_e,F_imag_e,raw_SF_intensity_e2,Qr_invA,Qz_invA,P_group,R_"
+        "group,T_group\n",
         result->wavelength_A, result->max_two_theta_deg, result->source_crc32, result->data_crc32,
         result->source_sites, result->expanded_sites, result->unknown_u_sites, result->species);
     for (int i = 0; i < result->count; ++i) {
         if (i % 256 == 0 && progress && progress(context, "Exporting CIF peaks"))
             return 0;
         const auto &p = result->peaks[i];
-        fprintf(stream, "%d,%d,%d,%.17g,%.17g,%.17g,%.17g,%.17g\n", p.h, p.k, p.l, p.d_A,
-                p.two_theta_deg, p.real_e, p.imag_e, p.intensity_e2);
+        fprintf(stream, "%d,%d,%d,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,P%d,R%d,T%d\n", p.h,
+                p.k, p.l, p.d_A, p.two_theta_deg, p.real_e, p.imag_e, p.intensity_e2, p.qr_invA,
+                p.qz_invA, p.group[CIF_POWDER] + 1, p.group[CIF_ROD] + 1, p.group[CIF_TICK] + 1);
     }
     return !ferror(stream);
 }

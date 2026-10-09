@@ -4,48 +4,127 @@ static void repaint(App *a) {
     InvalidateRect(a->canvas, NULL, FALSE);
     InvalidateRect(a->angle_canvas, NULL, FALSE);
 }
-const CifPeak *cif_selected_peak(const App *a) {
-    if (!a->cif_loaded || a->cif_dirty || a->worker || !analysis_ready(a) || a->cif_selected < 0 ||
-        a->cif_selected >= a->cif.count ||
-        fabs(a->cif.wavelength_A - a->geometry.settings.wavelength_A) > 1e-10 * a->cif.wavelength_A)
-        return NULL;
-    return &a->cif.peaks[a->cif_selected];
+int cif_guides_ready(const App *a) {
+    return a->cif_loaded && !a->cif_dirty && !a->worker && analysis_ready(a) && a->cif_overlay &&
+           (a->cif_overlay != 2 || (a->cif_mount_applied && !a->cif_mount_dirty)) &&
+           fabs(a->cif.wavelength_A - a->geometry.settings.wavelength_A) <=
+               1e-10 * a->cif.wavelength_A;
+}
+int cif_prepare_guides(App *a) {
+    int rods = a->cif_overlay == 2;
+    CifGuideView view = {0};
+    if (!cif_guides_ready(a))
+        return 0;
+    view.column_min = a->left;
+    view.column_max = a->left + a->view_width / a->zoom;
+    view.row_min = a->top;
+    view.row_max = a->top + a->view_height / a->zoom;
+    view.pixel_tolerance = 0.3 / a->zoom;
+    if (a->integration.signal && a->angle_width > 52 && a->angle_height > 213) {
+        const OscGrid *g = &a->integration.grid;
+        view.theta_min = g->theta_min;
+        view.theta_max = g->theta_max;
+        view.phi_min = g->phi_min;
+        view.phi_max = g->phi_max;
+        view.theta_tolerance = 0.2 * (g->theta_max - g->theta_min) / (a->angle_width - 52);
+        view.phi_tolerance = 0.2 * (g->phi_max - g->phi_min) / (a->angle_height - 213);
+    }
+    if (!a->guide_attempted || rods != a->guide_rods ||
+        memcmp(&view, &a->guide_view, sizeof view) ||
+        memcmp(&a->guide_geometry, &a->geometry, sizeof a->geometry)) {
+        a->guide_attempted = 1;
+        a->guide_rods = rods;
+        a->guide_geometry = a->geometry;
+        a->guide_view = view;
+        cif_guides_free(&a->guides);
+        cif_guides_build(&a->cif, &a->geometry, a->cif_mount, rods, &view, &a->guides,
+                         a->guide_error);
+        cif_status(a);
+    }
+    return !a->guide_error[0];
+}
+void cif_group_label(const App *a, int kind, int group, char *text, size_t capacity) {
+    const CifGrouping *set = &a->cif.grouping[kind];
+    const CifGroup *g = &set->groups[group];
+    const CifPeak *p = &a->cif.peaks[set->members[g->first]];
+    char extra[32] = "";
+    if (g->count > 1)
+        snprintf(extra, sizeof extra, " +%d", g->count - 1);
+    if (kind == CIF_ROD)
+        snprintf(text, capacity, "R%d (%d %d L)%s", group + 1, p->h, p->k, extra);
+    else
+        snprintf(text, capacity, "%c%d (%d %d %d)%s", kind == CIF_POWDER ? 'P' : 'T', group + 1,
+                 p->h, p->k, p->l, extra);
 }
 void cif_status(App *a) {
-    char text[1800];
+    char text[1900];
     const char *state;
     if (!a->cif_loaded) {
         SetWindowTextA(GetDlgItem(a->window, CIF_STATUS),
-                       "Load CIF to calculate raw |F|^2 (electrons^2). Select a row for a cyan "
-                       "2theta marker. No intensity normalization or multiplicity.");
+                       "Load CIF. P: equal 2theta, R: Qz rods, T: HKL ticks. Select a group to see "
+                       "every member below.");
         return;
     }
-    state = a->cif_dirty         ? "Inputs edited; Calculate to update. Marker hidden."
-            : !analysis_ready(a) ? "Apply image geometry to show a marker."
+    state = a->cif_dirty         ? "Inputs edited; Calculate to update. Guides hidden."
+            : !a->cif_overlay    ? "Guides off."
+            : !analysis_ready(a) ? "Apply matching image geometry to show guides."
             : fabs(a->cif.wavelength_A - a->geometry.settings.wavelength_A) >
                     1e-10 * a->cif.wavelength_A
-                ? "Wavelength mismatch; marker hidden. Use geometry A, then Calculate."
-                : "Select hkl: cyan powder-position marker (no orientation prediction).";
-    snprintf(text, sizeof text,
-             "%s | %s\r\n%d hkl; %d atoms; lambda %.8g A\r\nUnknown U=0: %d sites. %s\r\n"
-             "Factors: %s\r\nRaw |F|^2 in electrons^2; no multiplicity or normalization. "
-             "Waasmaier + Chantler; CIF dispersion values not used.",
-             a->cif.name, a->cif.spacegroup, a->cif.count, a->cif.expanded_sites,
-             a->cif.wavelength_A, a->cif.unknown_u_sites, state, a->cif.species);
+                ? "Wavelength mismatch; use Geometry A, then Calculate."
+            : a->cif_overlay == 2 && (!a->cif_mount_applied || a->cif_mount_dirty)
+                ? "Enter incidence / normal phi and Apply a1/a2 fiber. Guides hidden."
+            : a->guide_error[0] ? a->guide_error
+            : a->cif_overlay == 2
+                ? "Air guides: a1/a2 surface, b3 normal, full fiber rotation. No refraction."
+                : "Powder 2theta guides; no sample orientation assumed.";
+    snprintf(
+        text, sizeof text,
+        "%s\r\n%s | %s | %d hkl; %d P, %d R, %d T groups.\r\n"
+        "P = equal Bragg angle; R = equal Qr; T = equal Qr,Qz. +N means more HKLs; all members "
+        "below.\r\n"
+        "Raw |F|^2 in e^2. Table max is largest individual member, not a sum.\r\n"
+        "lambda %.8g A; %d atoms; unknown U=0: %d source sites. Factors: %s\r\n"
+        "Waasmaier + Chantler; no intensity normalization/multiplicity; CIF dispersion unused.",
+        state, a->cif.name, a->cif.spacegroup, a->cif.count, a->cif.grouping[CIF_POWDER].count,
+        a->cif.grouping[CIF_ROD].count, a->cif.grouping[CIF_TICK].count, a->cif.wavelength_A,
+        a->cif.expanded_sites, a->cif.unknown_u_sites, a->cif.species);
     SetWindowTextA(GetDlgItem(a->window, CIF_STATUS), text);
 }
 void cif_layout(App *a) {
     RECT r;
+    int height;
     GetClientRect(a->window, &r);
-    MoveWindow(GetDlgItem(a->window, CIF_LIST), 10, 473, 230, r.bottom > 513 ? r.bottom - 513 : 1,
-               TRUE);
+    height = (r.bottom - 544) / 2;
+    if (height < 52)
+        height = 52;
+    MoveWindow(GetDlgItem(a->window, CIF_LIST), 10, 502, 230, height, TRUE);
+    MoveWindow(GetDlgItem(a->window, CIF_MEMBERS), 10, 508 + height, 230,
+               r.bottom > 548 + height ? r.bottom - 548 - height : 1, TRUE);
+}
+static HWND combo(App *a, int id, int x, int y, int width, const char *items) {
+    HWND w = control(a, "COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, id, x, y, width,
+                     150);
+    for (; *items; items += strlen(items) + 1)
+        SendMessageA(w, CB_ADDSTRING, 0, (LPARAM)items);
+    SendMessageA(w, CB_SETCURSEL, 0, 0);
+    return w;
+}
+static void list_control(App *a, int id, const char *first, const char *last) {
+    const char *names[] = {first, "2theta", last};
+    LVCOLUMNA column = {0};
+    int i;
+    HWND list = control(a, WC_LISTVIEWA, "",
+                        WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
+                        id, 10, 502, 230, 80);
+    ListView_SetExtendedListViewStyle(list, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
+    column.mask = LVCF_TEXT | LVCF_WIDTH;
+    for (i = 0; i < 3; ++i) {
+        column.pszText = (char *)names[i];
+        column.cx = i == 0 ? 95 : (i == 1 ? 54 : 65);
+        ListView_InsertColumn(list, i, &column);
+    }
 }
 void cif_controls(App *a) {
-    HWND list, view;
-    LVCOLUMNA column = {0};
-    const char *names[] = {"h k l", "2theta deg", "raw |F|^2"};
-    const char *views[] = {"Detector", "Phi vs 2theta", "Side by side"};
-    int i;
     INITCOMMONCONTROLSEX controls = {sizeof controls, ICC_LISTVIEW_CLASSES};
     InitCommonControlsEx(&controls);
     control(a, "BUTTON", "CIF", WS_TABSTOP, CIF_PAGE, 126, 174, 46, 26);
@@ -61,24 +140,25 @@ void cif_controls(App *a) {
             291, 230, 22);
     CheckDlgButton(a->window, CIF_UNKNOWN_ZERO, BST_CHECKED);
     control(a, "STATIC", "View", 0, CIF_LABEL + 2, 10, 321, 40, 20);
-    view = control(a, "COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, CIF_VIEW, 55, 318,
-                   185, 150);
-    for (i = 0; i < 3; ++i)
-        SendMessageA(view, CB_ADDSTRING, 0, (LPARAM)views[i]);
-    control(a, "EDIT", "", ES_MULTILINE | ES_READONLY | WS_VSCROLL, CIF_STATUS, 10, 349, 230, 90);
-    control(a, "BUTTON", "Sort: angle / intensity", WS_TABSTOP, CIF_SORT, 10, 442, 153, 25);
-    control(a, "BUTTON", "Clear mark", WS_TABSTOP, CIF_CLEAR, 170, 442, 70, 25);
-    list = control(a, WC_LISTVIEWA, "",
-                   WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
-                   CIF_LIST, 10, 473, 230, 180);
-    ListView_SetExtendedListViewStyle(list, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
-    column.mask = LVCF_TEXT | LVCF_WIDTH;
-    for (i = 0; i < 3; ++i) {
-        column.pszText = (char *)names[i];
-        column.cx = i == 0 ? 68 : (i == 1 ? 70 : 74);
-        ListView_InsertColumn(list, i, &column);
-    }
+    combo(a, CIF_VIEW, 55, 318, 185, "Detector\0Phi vs 2theta\0Side by side\0");
+    control(a, "STATIC", "Guides", 0, CIF_LABEL + 3, 10, 349, 40, 20);
+    combo(a, CIF_OVERLAY, 55, 346, 185, "Off\0Powder 2theta arcs\0Arcs + Qz rods / L ticks\0");
+    SendMessageA(GetDlgItem(a->window, CIF_OVERLAY), CB_SETCURSEL, 1, 0);
+    control(a, "STATIC", "Inc deg", 0, CIF_LABEL + 4, 10, 377, 45, 20);
+    control(a, "EDIT", "0", WS_TABSTOP | ES_AUTOHSCROLL, CIF_INCIDENCE, 55, 374, 48, 24);
+    control(a, "STATIC", "N phi deg", 0, CIF_LABEL + 5, 113, 377, 70, 20);
+    control(a, "EDIT", "0", WS_TABSTOP | ES_AUTOHSCROLL, CIF_NORMAL_PHI, 187, 374, 53, 24);
+    control(a, "BUTTON", "Apply a1/a2 fiber", WS_TABSTOP, CIF_MOUNT, 10, 402, 144, 24);
+    control(a, "BUTTON", "Labels", WS_TABSTOP | BS_AUTOCHECKBOX, CIF_LABELS, 163, 402, 77, 24);
+    CheckDlgButton(a->window, CIF_LABELS, BST_CHECKED);
+    control(a, "EDIT", "", ES_MULTILINE | ES_READONLY | WS_VSCROLL, CIF_STATUS, 10, 431, 230, 39);
+    combo(a, CIF_KIND, 10, 474, 150, "P: 2theta groups\0R: Qz rod groups\0T: HKL tick groups\0");
+    control(a, "BUTTON", "By strength", WS_TABSTOP, CIF_SORT, 164, 474, 76, 24);
+    list_control(a, CIF_LIST, "Group / HKL +N", "max |F|^2");
+    list_control(a, CIF_MEMBERS, "Member h k l", "raw |F|^2");
     a->cif_selected = -1;
+    a->cif_overlay = 1;
+    a->cif_labels = 1;
     a->updating_cif = 1;
     set_number(a, CIF_WAVELENGTH, a->settings.wavelength_A);
     a->updating_cif = 0;
@@ -102,20 +182,33 @@ static void calculate(App *a, const char *path) {
     start_job(a, JOB_CIF, path);
 }
 static int by_angle(const void *left, const void *right) {
-    const CifPeak *a = (const CifPeak *)left, *b = (const CifPeak *)right;
-    if (a->two_theta_deg != b->two_theta_deg)
-        return a->two_theta_deg > b->two_theta_deg ? 1 : -1;
-    if (a->h != b->h)
-        return a->h - b->h;
-    if (a->k != b->k)
-        return a->k - b->k;
-    return a->l - b->l;
+    const CifDisplayRow *a = (const CifDisplayRow *)left, *b = (const CifDisplayRow *)right;
+    return a->angle == b->angle ? a->group - b->group : (a->angle > b->angle ? 1 : -1);
 }
 static int by_intensity(const void *left, const void *right) {
-    const CifPeak *a = (const CifPeak *)left, *b = (const CifPeak *)right;
-    if (a->intensity_e2 != b->intensity_e2)
-        return a->intensity_e2 < b->intensity_e2 ? 1 : -1;
-    return by_angle(left, right);
+    const CifDisplayRow *a = (const CifDisplayRow *)left, *b = (const CifDisplayRow *)right;
+    return a->intensity == b->intensity ? by_angle(left, right)
+                                        : (a->intensity < b->intensity ? 1 : -1);
+}
+static void rows(App *a) {
+    const CifGrouping *set = &a->cif.grouping[a->cif_kind];
+    int i;
+    a->updating_cif = 1;
+    a->cif_selected = -1;
+    ListView_SetItemCount(GetDlgItem(a->window, CIF_MEMBERS), 0);
+    ListView_SetItemState(GetDlgItem(a->window, CIF_LIST), -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    for (i = 0; i < set->count; ++i) {
+        const CifPeak *p = &a->cif.peaks[set->members[set->groups[i].first]];
+        a->cif_rows[i] = (CifDisplayRow){i, a->cif_kind == CIF_ROD ? p->qr_invA : p->two_theta_deg,
+                                         set->groups[i].maximum_intensity_e2};
+    }
+    if (set->count > 1)
+        qsort(a->cif_rows, set->count, sizeof *a->cif_rows,
+              a->cif_sort_intensity ? by_intensity : by_angle);
+    ListView_SetItemCount(GetDlgItem(a->window, CIF_LIST), set->count);
+    InvalidateRect(GetDlgItem(a->window, CIF_LIST), NULL, TRUE);
+    a->updating_cif = 0;
+    repaint(a);
 }
 int cif_command(App *a, int id, int notification) {
     char path[MAX_PATH];
@@ -130,8 +223,30 @@ int cif_command(App *a, int id, int notification) {
     if (((id == CIF_WAVELENGTH || id == CIF_MAXIMUM) && notification == EN_CHANGE) ||
         (id == CIF_UNKNOWN_ZERO && notification == BN_CLICKED)) {
         a->cif_dirty = a->cif_loaded;
-        cif_status(a);
-        repaint(a);
+    } else if ((id == CIF_INCIDENCE || id == CIF_NORMAL_PHI) && notification == EN_CHANGE) {
+        a->cif_mount_dirty = 1;
+    } else if (id == CIF_MOUNT) {
+        CifMount mount;
+        if (!number(a, CIF_INCIDENCE, &mount.incidence) ||
+            !number(a, CIF_NORMAL_PHI, &mount.normal_phi)) {
+            message(a, "Enter finite incidence and normal phi in degrees.");
+            return 1;
+        }
+        mount.incidence *= HBN_PI / 180;
+        mount.normal_phi *= HBN_PI / 180;
+        if (!cif_mount_valid(mount)) {
+            message(a, "Use |incidence| < 89 deg and normal phi in [-180,180] deg. Positive "
+                       "incidence means the beam enters the a1/a2 surface. Normal phi is its "
+                       "transverse direction (0 up, +90 left). Air geometry; no refraction.");
+            return 1;
+        }
+        a->cif_mount = mount;
+        a->cif_mount_applied = 1;
+        a->cif_mount_dirty = 0;
+        a->guide_attempted = 0;
+        a->guide_error[0] = 0;
+        a->cif_overlay = 2;
+        SendMessageA(GetDlgItem(a->window, CIF_OVERLAY), CB_SETCURSEL, 2, 0);
     } else if (id == CIF_OPEN) {
         if (choose_path(a, path, 0, "Crystallographic CIF\0*.cif\0\0", "cif"))
             calculate(a, path);
@@ -152,6 +267,20 @@ int cif_command(App *a, int id, int notification) {
         SendMessageA(GetDlgItem(a->window, VIEW_MODE), CB_SETCURSEL, a->view_mode, 0);
         analysis_layout(a);
         fit_view(a);
+    } else if (id == CIF_OVERLAY && notification == CBN_SELCHANGE) {
+        a->cif_overlay = (int)SendMessageA(GetDlgItem(a->window, CIF_OVERLAY), CB_GETCURSEL, 0, 0);
+        a->guide_attempted = 0;
+        a->guide_error[0] = 0;
+    } else if (id == CIF_LABELS) {
+        a->cif_labels = IsDlgButtonChecked(a->window, CIF_LABELS) == BST_CHECKED;
+    } else if (id == CIF_KIND && notification == CBN_SELCHANGE) {
+        a->cif_kind = (int)SendMessageA(GetDlgItem(a->window, CIF_KIND), CB_GETCURSEL, 0, 0);
+        rows(a);
+    } else if (id == CIF_SORT) {
+        a->cif_sort_intensity = !a->cif_sort_intensity;
+        SetWindowTextA(GetDlgItem(a->window, CIF_SORT),
+                       a->cif_sort_intensity ? "By position" : "By strength");
+        rows(a);
     } else if (id == CIF_EXPORT) {
         if (!a->cif_loaded)
             message(a, "Load a CIF first.");
@@ -159,33 +288,45 @@ int cif_command(App *a, int id, int notification) {
             message(a, "Inputs were edited. Calculate before exporting.");
         else if (choose_path(a, path, 1, "CIF peaks CSV\0*.csv\0\0", "csv"))
             start_job(a, JOB_CIF_EXPORT, path);
-    } else if (id == CIF_SORT && a->cif_loaded) {
-        char text[48];
-        GetWindowTextA(GetDlgItem(a->window, CIF_SORT), text, sizeof text);
-        if (a->cif.count > 1)
-            qsort(a->cif.peaks, a->cif.count, sizeof *a->cif.peaks,
-                  !strcmp(text, "Sort by angle") ? by_angle : by_intensity);
-        SetWindowTextA(GetDlgItem(a->window, CIF_SORT),
-                       !strcmp(text, "Sort by angle") ? "Sort by intensity" : "Sort by angle");
-        a->cif_selected = -1;
-        ListView_SetItemState(GetDlgItem(a->window, CIF_LIST), -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
-        InvalidateRect(GetDlgItem(a->window, CIF_LIST), NULL, TRUE);
-        repaint(a);
-    } else if (id == CIF_CLEAR) {
-        a->cif_selected = -1;
-        ListView_SetItemState(GetDlgItem(a->window, CIF_LIST), -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
-        repaint(a);
-    }
+    } else
+        return 1;
+    cif_status(a);
+    repaint(a);
     return 1;
 }
 LRESULT cif_notify(App *a, NMHDR *header) {
-    if (header->idFrom != CIF_LIST)
+    const CifGrouping *set = &a->cif.grouping[a->cif_kind];
+    if (header->idFrom != CIF_LIST && header->idFrom != CIF_MEMBERS)
         return 0;
     if (header->code == LVN_GETDISPINFOA) {
         NMLVDISPINFOA *info = (NMLVDISPINFOA *)header;
-        if ((info->item.mask & LVIF_TEXT) && info->item.iItem >= 0 &&
-            info->item.iItem < a->cif.count) {
-            const CifPeak *p = &a->cif.peaks[info->item.iItem];
+        int row = info->item.iItem;
+        const CifPeak *p;
+        const CifGroup *group;
+        if (!(info->item.mask & LVIF_TEXT) || row < 0)
+            return 0;
+        if (header->idFrom == CIF_LIST) {
+            int id;
+            if (row >= set->count || !a->cif_rows)
+                return 0;
+            id = a->cif_rows[row].group;
+            group = &set->groups[id];
+            p = &a->cif.peaks[set->members[group->first]];
+            if (info->item.iSubItem == 0)
+                cif_group_label(a, a->cif_kind, id, info->item.pszText, info->item.cchTextMax);
+            else if (info->item.iSubItem == 1)
+                snprintf(info->item.pszText, info->item.cchTextMax,
+                         a->cif_kind == CIF_ROD ? "varies" : "%.4f", p->two_theta_deg);
+            else
+                snprintf(info->item.pszText, info->item.cchTextMax, "%.7g",
+                         group->maximum_intensity_e2);
+        } else {
+            if (a->cif_selected < 0 || a->cif_selected >= set->count)
+                return 0;
+            group = &set->groups[a->cif_selected];
+            if (row >= group->count)
+                return 0;
+            p = &a->cif.peaks[set->members[group->first + row]];
             if (info->item.iSubItem == 0)
                 snprintf(info->item.pszText, info->item.cchTextMax, "%d %d %d", p->h, p->k, p->l);
             else if (info->item.iSubItem == 1)
@@ -193,16 +334,22 @@ LRESULT cif_notify(App *a, NMHDR *header) {
             else
                 snprintf(info->item.pszText, info->item.cchTextMax, "%.7g", p->intensity_e2);
         }
-    } else if (header->code == LVN_ITEMCHANGED && !a->worker) {
-        char text[300];
-        a->cif_selected = ListView_GetNextItem(header->hwndFrom, -1, LVNI_SELECTED);
-        if (a->cif_selected >= 0 && a->cif_selected < a->cif.count) {
-            const CifPeak *p = &a->cif.peaks[a->cif_selected];
+    } else if (header->code == LVN_ITEMCHANGED && header->idFrom == CIF_LIST && !a->worker &&
+               !a->updating_cif) {
+        int row = ListView_GetNextItem(header->hwndFrom, -1, LVNI_SELECTED);
+        a->cif_selected = row >= 0 && row < set->count ? a->cif_rows[row].group : -1;
+        ListView_SetItemCount(GetDlgItem(a->window, CIF_MEMBERS),
+                              a->cif_selected < 0 ? 0 : set->groups[a->cif_selected].count);
+        InvalidateRect(GetDlgItem(a->window, CIF_MEMBERS), NULL, TRUE);
+        if (a->cif_selected >= 0) {
+            char text[240], label[96];
+            const CifGroup *g = &set->groups[a->cif_selected];
+            const CifPeak *p = &a->cif.peaks[set->members[g->first]];
+            cif_group_label(a, a->cif_kind, a->cif_selected, label, sizeof label);
             snprintf(text, sizeof text,
-                     "CIF (%d %d %d) | 2theta %.8f deg | d %.8g A | raw |F|^2 %.10g e^2%s", p->h,
-                     p->k, p->l, p->two_theta_deg, p->d_A, p->intensity_e2,
-                     cif_selected_peak(a) ? " | cyan position marker"
-                                          : " | marker hidden; see CIF status");
+                     "%s | %d members below | representative Qr %.7g, Qz %.7g /A | P%d R%d T%d",
+                     label, g->count, p->qr_invA, p->qz_invA, p->group[0] + 1, p->group[1] + 1,
+                     p->group[2] + 1);
             SetWindowTextA(a->stage_label, text);
         }
         repaint(a);
@@ -210,18 +357,26 @@ LRESULT cif_notify(App *a, NMHDR *header) {
     return 0;
 }
 void cif_publish(App *a) {
+    CifDisplayRow *display =
+        (CifDisplayRow *)calloc(a->pending_cif.count ? a->pending_cif.count : 1, sizeof *display);
+    if (!display) {
+        cif_peaks_free(&a->pending_cif);
+        message(a, "Not enough memory for CIF display. Previous table retained.");
+        return;
+    }
     cif_peaks_free(&a->cif);
+    free(a->cif_rows);
+    a->cif_rows = display;
     a->cif = a->pending_cif;
     memset(&a->pending_cif, 0, sizeof a->pending_cif);
     strcpy(a->cif_path, a->job_path);
     a->cif_loaded = 1;
-    a->cif_selected = -1;
     a->cif_dirty = 0;
-    ListView_SetItemState(GetDlgItem(a->window, CIF_LIST), -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
-    ListView_SetItemCount(GetDlgItem(a->window, CIF_LIST), a->cif.count);
-    SetWindowTextA(GetDlgItem(a->window, CIF_SORT), "Sort by intensity");
+    a->guide_attempted = 0;
+    a->guide_error[0] = 0;
+    cif_guides_free(&a->guides);
+    rows(a);
     cif_status(a);
-    repaint(a);
 }
 int cif_export(App *a, const char *path) {
     char temporary[MAX_PATH];
@@ -229,60 +384,16 @@ int cif_export(App *a, const char *path) {
     FILE *f = begin_output(path, temporary, a->error);
     if (!f)
         return 0;
+    fprintf(
+        f,
+        "# fiber_mount_applied=%d,mount_inputs_edited=%d,incidence_deg=%.17g,normal_phi_deg=%.17g\n"
+        "# External-air fiber guides; a1/a2 surface, b3 normal; no refraction\n",
+        a->cif_mount_applied, a->cif_mount_dirty, a->cif_mount.incidence * 180 / HBN_PI,
+        a->cif_mount.normal_phi * 180 / HBN_PI);
     ok = cif_peaks_write(f, &a->cif, app_progress, a);
     if (InterlockedCompareExchange(&a->cancel, 0, 0)) {
         strcpy(a->error, "Canceled.");
         ok = 0;
     }
     return finish_output(f, temporary, path, ok, a->error);
-}
-void cif_detector_overlay(App *a, HDC dc) {
-    const CifPeak *peak = cif_selected_peak(a);
-    HPEN pen, old;
-    int i, connected = 0;
-    if (!peak)
-        return;
-    pen = CreatePen(PS_SOLID, 2, RGB(0, 220, 240));
-    old = (HPEN)SelectObject(dc, pen);
-    for (i = 0; i <= 720; ++i) {
-        double c, r, x, y;
-        if (!osc_angle_pixel(&a->geometry, peak->two_theta_deg * HBN_PI / 180, i * HBN_PI / 360, &c,
-                             &r)) {
-            connected = 0;
-            continue;
-        }
-        x = (c - a->left) * a->zoom;
-        y = (r - a->top) * a->zoom;
-        if (fabs(x) > 100000 || fabs(y) > 100000) {
-            connected = 0;
-            continue;
-        }
-        if (connected)
-            LineTo(dc, (int)x, (int)y);
-        else
-            MoveToEx(dc, (int)x, (int)y, NULL);
-        connected = 1;
-    }
-    SelectObject(dc, old);
-    DeleteObject(pen);
-}
-void cif_angle_marker(App *a, HDC dc, RECT bounds) {
-    const CifPeak *peak = cif_selected_peak(a);
-    const OscGrid *g = &a->integration.grid;
-    HPEN pen, old;
-    double theta;
-    int x;
-    if (!peak || !a->integration.signal)
-        return;
-    theta = peak->two_theta_deg * HBN_PI / 180;
-    if (theta < g->theta_min || theta > g->theta_max)
-        return;
-    x = bounds.left + (int)((theta - g->theta_min) / (g->theta_max - g->theta_min) *
-                            (bounds.right - bounds.left));
-    pen = CreatePen(PS_SOLID, 2, RGB(0, 200, 220));
-    old = (HPEN)SelectObject(dc, pen);
-    MoveToEx(dc, x, bounds.top, NULL);
-    LineTo(dc, x, bounds.bottom);
-    SelectObject(dc, old);
-    DeleteObject(pen);
 }
