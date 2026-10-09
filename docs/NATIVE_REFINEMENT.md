@@ -850,6 +850,31 @@ the proposed improvement direction and meet a predeclared relative decision-erro
 It cannot produce selected estimates, profiles or identification claims. Restart the
 normal qualified workflow from any retained warm start; never relax final inference gates.
 
+## Parameter steps and iteration-boundary stopping
+
+For Python TRF calls, `finite_difference_step` may be a scalar or a tuple aligned
+with the complete declared parameter roster, including fixed coordinates. Each
+entry is a step in normalized bound coordinates and must lie strictly between
+zero and one. A desired physical step `h_i` is declared as
+`h_i / (upper_i - lower_i)`; sensitivity scales and search bounds need not imply
+the same derivative step. The existing bound-aware direction and representability
+checks apply. Vector steps are not admitted for SLSQP. Scalar defaults and
+TRF `ftol=xtol=gtol=1e-6` are unchanged.
+
+`fit_native_parameters(..., stop_requested=callable)` requires TRF and SciPy
+1.16 or newer. It checks the callable after complete optimizer iterations, not
+inside a derivative batch or before the initial prediction. A true result uses
+SciPy's public iteration callback to return the accepted point with
+`optimizer_status=-2` and `optimizer_converged=False`, and skips later starts.
+The per-evaluation `callback` still includes derivative probes and is independent.
+An initially converged start can finish without an iteration callback.
+
+Reserve a complete derivative batch before a caller deadline; `max_nfev` does
+not count all probes. Budget prediction, nuisance fitting, scoring and checkpoint
+work together. A stopped or evaluation-limited endpoint is retained evidence,
+not a converged fit. Keep `minimum_resolved`, returned status, actual evaluations
+and numerical/predictive gates separate from the best evaluated probe.
+
 ## Batched finite-difference predictions
 
 `fit_native_parameters(..., predict_many=callable)` optionally batches SciPy's bounded

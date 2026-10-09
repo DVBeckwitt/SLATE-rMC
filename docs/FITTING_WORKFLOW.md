@@ -543,3 +543,85 @@ of fixed-rule numerical controls. Historical failed attempts are preserved.
 A future optimization must budget complete objective/Jacobian work rather than
 only the measured raw contraction; resume from a declared saved trial with fresh
 endpoint qualification, not from a silently promoted finite-difference probe.
+
+
+### October 9 safeguarded continuation
+
+The next authorized stage resumes the last complete trial above, not its lower
+finite-difference probe. Its seven active coordinates are the Bi and outer-Se
+fractional positions, Gaussian width, Lorentzian width and probability, surface
+fraction, and extra film thickness. Top/bottom roughness are fixed for this stage
+because all 32 preceding local roughness probes produced identical raw predictions;
+this does not establish global insensitivity or identify those parameters.
+
+Declare derivative steps separately from search bounds. This stage uses half of
+1e-4 times each declared physical sensitivity scale, converted to normalized bound
+units. At the resumed seed, all seven full-step/half-step profiled-residual slope
+checks passed the predeclared 5% relative L2 limit; the largest change was 0.0420%.
+This is local derivative stability, not refined-rule gradient qualification.
+TRF retains its existing sensitivity scaling and 1e-6 stopping tolerances. Its
+iteration callback can return an accepted but unconverged endpoint before a caller
+deadline; see [bounded continuation controls](NATIVE_REFINEMENT.md#parameter-steps-and-iteration-boundary-stopping).
+Do not promote an evaluation or derivative probe over the returned endpoint.
+
+The frozen observation, N=13, source/rod roster, covariance and shared background
+are unchanged. Every preservation threshold remains anchored to the original
+243064.3682 combined-objective baseline, never reset to the resumed trial.
+The finite contract is 10800 seconds overall, 7200 seconds for optimization,
+80 full solver evaluations and 680 fresh predictions, with a complete derivative
+batch reserved before stopping. A returned endpoint must pass the original
+regional, separate 003/006, selection and final audit checks, all 28 numerical
+screens, and nominal/finer improvement. The signed completion report additionally
+requires finer-rule non-regression against the resumed seed.
+
+Compile the finer response once and retain it for both seed and endpoint checks.
+Checkpoint only changing arrays plus exact caller/runtime provenance; bind the
+immutable prepared observation through its verified parent-pack hash. Recompressing
+all prepared memberships/covariance during every checkpoint is unnecessary work.
+The first continuation checkpoint took 0.017 seconds and held about 1.3 MB of
+uncompressed changing data, compared with the preceding 242 MB whole-pack payload.
+
+
+This continuation returned normally: four full evaluations/four Jacobians and
+three accepted iterations took 251.89 seconds. TRF stopped on its unchanged ftol
+condition, with optimizer_status=2 and minimum_resolved=true. The objective fell
+from the resumed 241525.5335 to 241365.5419, or 0.06624% further improvement;
+relative to the original 243064.3682 baseline the improvement is 0.69892%.
+All 28 seed and 28 endpoint nominal/finer screens passed. The finer objective
+fell from 243006.9896 originally and 241624.7347 at the resumed seed to
+241493.3347 at the endpoint, passing both improvement comparisons.
+
+The candidate was nevertheless not selected: the protected 00L detector region
+(original Bragg_0, 498 cells) has a 1.05267375 RMS ratio against baseline,
+exceeding the frozen 1.05 limit (8.0285381 versus an 8.0081460 RMS ceiling).
+Its 00L identity is retained in the September 30 diagonal-background input.
+This region is distinct from the separately checked 003/006 profile windows.
+All other protected Bragg/profile RMS ratios, separate 003/006 checks and
+selection/audit checks passed. Audit MAE changed from 0.4753871 to 0.4793336,
+within the original 5% allowance. This is an explicit tradeoff in the combined
+objective, not a failed optimization or numerical crash. A total-score optimum
+need not satisfy separately checked regional inequalities; this TRF stage checks
+those inequalities for admission rather than enforcing them during each step.
+Do not relax the guard, substitute a derivative probe or label this candidate
+selected. Any further constrained stage needs its own declared bounded caller
+and final checks against the same original baseline.
+
+Nominal/finer compilation took 389.97/1466.46 seconds; total elapsed time was
+2300.77 seconds (38.35 minutes), including setup, 14 derivative-screen probes
+and final checks. There were 38 fresh predictions including the prechecks.
+This is a warm-start continuation with changed steps/active set, not an
+isolated speed benchmark against the earlier run. The extra film thickness
+reached its 500-angstrom search boundary. N remains 13; physical adoption and
+parameter identification remain unavailable. All preceding background/source
+qualifications, signed-data requirements and same-image audit limitations apply.
+
+Evidence is retained externally as
+`bi2se3_continuation_search_checks.ra_diag.npz`,
+`bi2se3_continued_combined_fit.ra_diag.npz`, and
+`bi2se3_continued_signed_report.ra_diag.npz` in the October 9 directory above.
+The report preserves exact code/caller provenance and the unselected endpoint.
+`Bi2Se3_continued_combined_profiles.png` compares original, resumed and returned
+curves on exactly the highlighted detector support. Software checks cover scalar
+step compatibility, vector steps, public iteration stopping, early rejection,
+formatting/lint, wheel construction and CLI import; they do not qualify the
+physical model. No assessment harness is retained in the repository.

@@ -1464,3 +1464,15 @@ specimen coordinates provide supported lattice/site-displacement controls; confi
 CIF input does not invent independent lattice/Debye sliders. Legacy pruning, old optical
 equations and unsupported features remain absent. Native Simulator execution is separate
 from the still disconnected fitting Run/adoption/stage-result hooks.
+
+
+## Bounded TRF continuation controls
+
+Python native TRF admits a full-roster vector of normalized finite-difference
+steps, retaining scalar defaults and physical bounds. Vector steps require TRF;
+nonfinite, zero, unit-sized or misaligned steps reject before prediction.
+Optional `stop_requested` requires TRF and SciPy >=1.16, is checked only after
+complete iterations, and returns the accepted endpoint with status -2 without
+marking it converged or entering later starts. It cannot interrupt initial
+preparation or an active derivative batch. Prediction callbacks still see probes;
+callers must not promote a lower probe as the returned endpoint.

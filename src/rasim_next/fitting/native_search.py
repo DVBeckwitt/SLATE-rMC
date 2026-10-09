@@ -266,9 +266,10 @@ def validate_native_search_request(
     method: str = "slsqp",
     maximum_iterations: int = 50,
     maximum_function_evaluations: int = 80,
-    finite_difference_step: float = 1e-4,
+    finite_difference_step: float | tuple[float, ...] = 1e-4,
     enforce_historical_guards: bool = False,
     batched: bool = False,
+    stop_requested: Callable[[], bool] | None = None,
 ) -> None:
     """Validate a complete search request without calling a predictor."""
     if method not in ("slsqp", "trf"):
@@ -279,7 +280,24 @@ def validate_native_search_request(
         raise ValueError("TRF cannot enforce historical inequalities; use SLSQP")
     if batched and method == "slsqp" and Version(scipy_version) < Version("1.16"):
         raise RuntimeError("predict_many requires SciPy >= 1.16")
+    if stop_requested is not None:
+        if not callable(stop_requested):
+            raise TypeError("stop_requested must be callable")
+        if method != "trf" or Version(scipy_version) < Version("1.16"):
+            raise ValueError("iteration-boundary stopping requires TRF and SciPy >= 1.16")
     names = tuple(p.name for p in parameters)
+    step = np.asarray(finite_difference_step)
+    if (
+        np.iscomplexobj(step)
+        or step.shape not in ((), (len(parameters),))
+        or (step.ndim and method != "trf")
+        or not np.all(np.isfinite(step))
+        or np.any(step <= 0)
+        or np.any(step >= 1)
+    ):
+        raise ValueError(
+            "finite-difference steps must be in (0, 1), scalar or one per TRF parameter"
+        )
     if not names:
         raise ValueError("at least one declared parameter is required")
     if enforce_historical_guards and not observations.allow_guard_constraints:
@@ -299,7 +317,6 @@ def validate_native_search_request(
         or np.any(starts > upper)
         or type(maximum_iterations) is not int
         or maximum_iterations < 1
-        or not 0 < finite_difference_step < 1
     ):
         raise ValueError("invalid parameter roster, starts, fixed values or optimization budget")
     for name, value in fixed_values.items():
@@ -338,9 +355,10 @@ def fit_native_parameters(
     previous_predictions: tuple[np.ndarray, np.ndarray] | None = None,
     maximum_iterations: int = 50,
     maximum_function_evaluations: int = 80,
-    finite_difference_step: float = 1e-4,
+    finite_difference_step: float | tuple[float, ...] = 1e-4,
     enforce_historical_guards: bool = False,
     callback=None,
+    stop_requested: Callable[[], bool] | None = None,
     background_problem: NativeBackgroundProblem | NativeLinearBackgroundProblem | None = None,
     mixture_parameter: str | None = None,
 ):
@@ -356,6 +374,11 @@ def fit_native_parameters(
     TRF uses the public least-squares API and a shared bounded difference batch.
     Its function budget excludes derivative probes, which evaluation_count includes.
     Callbacks must not change the predictor state within a precomputed batch.
+    TRF accepts a finite-difference step for each full-roster coordinate, in
+    normalized bound units. Scalar steps retain their existing behavior.
+    With SciPy >= 1.16, stop_requested is checked after complete TRF iterations;
+    a true value returns the accepted endpoint as unconverged, with status -2.
+    It stops subsequent starts too. Reserve a whole derivative batch for stopping.
     """
     if (
         background_problem is not None
@@ -385,6 +408,7 @@ def fit_native_parameters(
         finite_difference_step=finite_difference_step,
         enforce_historical_guards=enforce_historical_guards,
         batched=predict_many is not None,
+        stop_requested=stop_requested,
     )
     names = tuple(p.name for p in parameters)
     lower, upper = np.array([(p.lower, p.upper) for p in parameters]).T
@@ -594,7 +618,9 @@ def fit_native_parameters(
         def residual_jacobian(x):
             center = evaluate(x)
             forward, backward = 1.0 - x, x
-            step = finite_difference_step
+            step = np.asarray(finite_difference_step)
+            if step.ndim:
+                step = step[active]
             delta = np.where(
                 forward >= np.minimum(step, backward),
                 np.minimum(step, forward),
@@ -651,6 +677,14 @@ def fit_native_parameters(
             evaluation_count += 1
             if callback is not None:
                 callback(literal)
+            trf_options = {}
+            if stop_requested is not None:
+
+                def stop_after_iteration(_):
+                    if stop_requested():
+                        raise StopIteration
+
+                trf_options["callback"] = stop_after_iteration
             result = least_squares(
                 lambda x: evaluate(x).optimization_residual,
                 initial,
@@ -664,6 +698,7 @@ def fit_native_parameters(
                 ftol=1e-6,
                 xtol=1e-6,
                 gtol=1e-6,
+                **trf_options,
             )
         elif len(active) or enforce_historical_guards:
             options = dict(maxiter=maximum_iterations, eps=finite_difference_step, ftol=1e-9)
@@ -684,6 +719,7 @@ def fit_native_parameters(
             )
         point = OptimizeResult(evaluate(result.x))
         point.optimizer_converged = bool(result.success)
+        point.optimizer_status = result.get("status")
         point.optimizer_message = str(result.message)
         point.iterations = result.get("nit")
         point.function_evaluations = result.get("nfev")
@@ -697,6 +733,8 @@ def fit_native_parameters(
             and (converged is None or point.objective < converged.objective)
         ):
             converged = point
+        if point.optimizer_status == -2:
+            break
     return OptimizeResult(
         runs=tuple(runs),
         best_evaluated=best,
