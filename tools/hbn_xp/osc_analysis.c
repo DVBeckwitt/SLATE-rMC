@@ -118,12 +118,13 @@ static double polygon_area(const Polygon *p) {
     return fabs(area) * .5;
 }
 static void clip(Polygon *p, int axis, double edge, int greater) {
-    Polygon q = {0};
+    Polygon q;
     int i;
     Vertex a;
     double av;
     if (!p->n)
         return;
+    q.n = 0;
     a = p->p[p->n - 1];
     av = axis ? a.y : a.x;
     for (i = 0; i < p->n; ++i) {
@@ -144,13 +145,13 @@ static void clip(Polygon *p, int axis, double edge, int greater) {
         a = b;
         av = bv;
     }
-    *p = q;
+    p->n = q.n;
+    memcpy(p->p, q.p, (size_t)q.n * sizeof *q.p);
 }
 static int pieces(const OscGeometry *g, int c, int r, const OscAngle a[4], Polygon p[4]) {
     double pc = g->settings.initial[2], pr = g->settings.initial[3];
     double tol = 128 * DBL_EPSILON * fmax(g->columns, g->rows);
     int i, n = 0;
-    memset(p, 0, 4 * sizeof *p);
     if (fabs(pc - c) <= .5 + tol && fabs(pr - r) <= .5 + tol) {
         const double cx[] = {-.5, .5, .5, -.5}, cy[] = {-.5, -.5, .5, .5};
         if (fabs(pc - c + .5) <= tol)
@@ -184,18 +185,22 @@ static int pieces(const OscGeometry *g, int c, int r, const OscAngle a[4], Polyg
         }
     } else {
         const int indices[2][3] = {{0, 1, 2}, {0, 2, 3}};
+        double corner_chi[4];
+        for (i = 0; i < 4; ++i) {
+            if (!a[i].azimuth_valid)
+                return 0;
+            corner_chi[i] = osc_wrap_phi(-HBN_PI / 2 - a[i].phi);
+        }
         for (i = 0; i < 2; ++i) {
             int j;
             p[n].n = 3;
             for (j = 0; j < 3; ++j) {
                 int k = indices[i][j];
-                if (!a[k].azimuth_valid)
-                    return 0;
                 p[n].p[j].x = a[k].theta;
-                double chi = osc_wrap_phi(-HBN_PI / 2 - a[k].phi);
+                double chi = corner_chi[k];
                 if (j)
                     chi = -HBN_PI / 2 - p[n].p[j - 1].y +
-                          osc_wrap_phi(chi - osc_wrap_phi(-HBN_PI / 2 - a[indices[i][j - 1]].phi));
+                          osc_wrap_phi(chi - corner_chi[indices[i][j - 1]]);
                 p[n].p[j].y = -HBN_PI / 2 - chi;
             }
             if (polygon_area(p + n) > 0)
@@ -227,14 +232,35 @@ static double deposit(const Polygon *piece, double full, double value, int maske
         int p1 = (int)fmin(g->phi_bins, ceil((ymax - lo) / dp)), p, t;
         for (p = p0; p < p1; ++p)
             for (t = t0; t < t1; ++t) {
-                Polygon clipped = *piece;
+                Polygon clipped;
+                const Polygon *overlap = piece;
                 double weight;
                 size_t index = (size_t)p * g->theta_bins + t;
-                clip(&clipped, 0, g->theta_min + t * dt, 1);
-                clip(&clipped, 0, g->theta_min + (t + 1) * dt, 0);
-                clip(&clipped, 1, lo + p * dp, 1);
-                clip(&clipped, 1, lo + (p + 1) * dp, 0);
-                weight = polygon_area(&clipped) / full;
+                double left = g->theta_min + t * dt, right = g->theta_min + (t + 1) * dt;
+                double bottom = lo + p * dp, top = lo + (p + 1) * dp;
+                /* Skip only the initial no-op clips. Once an intersection is computed,
+                   rounding can move it beyond the original bounds, so run later clips. */
+                if (xmin < left || xmax > right || ymin < bottom || ymax > top) {
+                    int clipped_once = 0;
+                    clipped.n = piece->n;
+                    memcpy(clipped.p, piece->p, (size_t)piece->n * sizeof *piece->p);
+                    if (xmin < left) {
+                        clip(&clipped, 0, left, 1);
+                        clipped_once = 1;
+                    }
+                    if (clipped_once || xmax > right) {
+                        clip(&clipped, 0, right, 0);
+                        clipped_once = 1;
+                    }
+                    if (clipped_once || ymin < bottom) {
+                        clip(&clipped, 1, bottom, 1);
+                        clipped_once = 1;
+                    }
+                    if (clipped_once || ymax > top)
+                        clip(&clipped, 1, top, 0);
+                    overlap = &clipped;
+                }
+                weight = polygon_area(overlap) / full;
                 result->panel_area[index] += weight;
                 if (!masked) {
                     result->signal[index] += weight * value;

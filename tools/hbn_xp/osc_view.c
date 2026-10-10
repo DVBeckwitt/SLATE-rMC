@@ -21,17 +21,25 @@ void make_preview(App *a) {
         message(a, "Preview allocation failed; full-resolution display remains available.");
         return;
     }
-    for (r = 0; r < a->image.rows; ++r)
-        for (c = 0; c < a->image.columns; ++c)
-            a->preview[(size_t)(r / s) * a->preview_cols + c / s] += (float)pixel(a, c, r);
     for (r = 0; r < a->preview_rows; ++r)
         for (c = 0; c < a->preview_cols; ++c) {
             int nr = a->image.rows - r * s, nc = a->image.columns - c * s;
+            int dr, dc;
+            float sum = 0;
+            const int *dark = a->subtract ? a->image.dark_counts : NULL;
             if (nr > s)
                 nr = s;
             if (nc > s)
                 nc = s;
-            a->preview[(size_t)r * a->preview_cols + c] /= (float)(nr * nc);
+            /* Preserve row-major addition within each block, including signed counts. */
+            for (dr = 0; dr < nr; ++dr) {
+                size_t start = (size_t)(r * s + dr) * a->image.columns + c * s;
+                for (dc = 0; dc < nc; ++dc) {
+                    size_t i = start + dc;
+                    sum += (float)(a->image.counts[i] - (dark ? dark[i] : 0));
+                }
+            }
+            a->preview[(size_t)r * a->preview_cols + c] = sum / (float)(nr * nc);
         }
     a->view_dirty = 1;
 }

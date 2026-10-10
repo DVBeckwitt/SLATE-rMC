@@ -20,6 +20,24 @@ specific to the supplied calibrant at its measured position.
 The demo folder also contains PbI2, Bi2Se3 and Bi2Te3 CIFs from the repository.
 These are separate material references, not models of the supplied hBN image.
 
+The application is already native C11/C++17. Version 6 reduces repeated work without
+changing precision: strip-based OSC decoding, block-local previews, Gaussian weights
+reused within each calibration, and fewer polygon copies/clips during integration.
+Additional OSC staging memory is 186 kB for a 3000-column file (at most 1 MiB total).
+No additional runtime or hardware requirement is introduced.
+
+On the development computer, median times from three runs of 32-bit builds with
+identical compiler settings and supplied hBN/dark files changed from 142 to 97 ms
+for both OSC loads, 21 to 7 ms
+for a dark-subtracted preview, 233 to 200 ms for calibration, and 4.80 to 3.41 seconds
+for an 800 by 360 angular integration. These are component timings with warm file
+cache on modern Windows, not predicted XP times. Complete decoded pixels, previews,
+fit observations/results, angular signal/area/panel arrays and count-accounting
+totals matched version 5 bit for bit. Focused checks also cover endian/strip edges,
+signed partial preview blocks, reflected profile filters, beam-center and phi-wrap
+boundaries, cropping, masking, cancellation and malformed file rejection. They
+establish implementation equivalence, not a new physical calibration validation.
+
 ## Viewing
 
 1. Choose **Open OSC**. The input must be an uncompressed R-AXIS `.osc`; decompress

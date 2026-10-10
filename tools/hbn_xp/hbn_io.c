@@ -114,27 +114,38 @@ int osc_load(const char *path, HbnImage *image, HbnProgress progress, void *cont
     next.rows = (int)width;
     next.columns = (int)height;
     next.counts = (int *)malloc((size_t)width * height * sizeof(int));
-    row = (unsigned char *)malloc(2 * width);
+    /* A small raw-row strip makes the clockwise native writes contiguous.
+       At 3000 columns this uses 192 kB, without a second full image. */
+    row = (unsigned char *)malloc((size_t)32 * 2 * width);
     if (!next.counts || !row) {
         strcpy(error, "Not enough memory to open this image.");
         goto fail;
     }
     crc = crc_bytes(crc, header, sizeof header, table);
-    for (r = 0; r < (int)height; ++r) {
-        if (progress && progress(context, "Reading OSC")) {
-            strcpy(error, "Canceled.");
-            goto fail;
+    for (r = 0; r < (int)height; r += 32) {
+        int count = (int)height - r, j;
+        if (count > 32)
+            count = 32;
+        for (j = 0; j < count; ++j) {
+            unsigned char *raw = row + (size_t)j * 2 * width;
+            if (progress && progress(context, "Reading OSC")) {
+                strcpy(error, "Canceled.");
+                goto fail;
+            }
+            if (fread(raw, 2, width, f) != width) {
+                strcpy(error, "Truncated OSC pixel data.");
+                goto fail;
+            }
+            crc = crc_bytes(crc, raw, 2 * width, table);
         }
-        if (fread(row, 2, width, f) != width) {
-            strcpy(error, "Truncated OSC pixel data.");
-            goto fail;
-        }
-        crc = crc_bytes(crc, row, 2 * width, table);
         for (c = 0; c < (int)width; ++c) {
-            int v = big ? (row[2 * c] * 256 + row[2 * c + 1]) : (row[2 * c + 1] * 256 + row[2 * c]);
-            if (v >= 32768)
-                v = (v - 32768) * 32;
-            next.counts[(size_t)c * height + (height - 1 - (unsigned)r)] = v;
+            for (j = 0; j < count; ++j) {
+                const unsigned char *raw = row + (size_t)j * 2 * width + 2 * c;
+                int v = big ? (raw[0] * 256 + raw[1]) : (raw[1] * 256 + raw[0]);
+                if (v >= 32768)
+                    v = (v - 32768) * 32;
+                next.counts[(size_t)c * height + (height - 1 - (unsigned)(r + j))] = v;
+            }
         }
     }
     if (fgetc(f) != EOF || ferror(f)) {

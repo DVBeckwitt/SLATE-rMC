@@ -366,25 +366,40 @@ static int reflect(int i, int n) {
         i = i < 0 ? -i - 1 : 2 * n - i - 1;
     return i;
 }
-static void smooth(const double *a, int n, double sigma, double *out) {
-    double weights[193], sum = 0;
-    int radius = (int)(4 * sigma + .5), i, k;
+typedef struct {
+    int radius;
+    double weights[193];
+} GaussianKernel;
+static void gaussian_kernel(double sigma, GaussianKernel *kernel) {
+    double sum = 0, *weights = kernel->weights;
+    int radius = (int)(4 * sigma + .5), k;
+    kernel->radius = radius;
     for (k = -radius; k <= radius; ++k) {
         weights[k + radius] = exp(-.5 * k * k / (sigma * sigma));
         sum += weights[k + radius];
     }
     for (k = 0; k <= 2 * radius; ++k)
         weights[k] /= sum;
+}
+static void smooth(const double *a, int n, const GaussianKernel *kernel, double *out) {
+    int i, k, radius = kernel->radius;
+    const double *weights = kernel->weights;
     for (i = 0; i < n; ++i) {
         double v = 0;
-        for (k = -radius; k <= radius; ++k)
-            v += weights[k + radius] * a[reflect(i + k, n)];
+        if (i >= radius && i < n - radius) {
+            for (k = -radius; k <= radius; ++k)
+                v += weights[k + radius] * a[i + k];
+        } else {
+            for (k = -radius; k <= radius; ++k)
+                v += weights[k + radius] * a[reflect(i + k, n)];
+        }
         out[i] = v;
     }
 }
-static void contrast(const double *a, int n, double broad, double *out, double *scratch) {
+static void contrast(const double *a, int n, const GaussianKernel *narrow,
+                     const GaussianKernel *broad, double *out, double *scratch) {
     int i;
-    smooth(a, n, 2, out);
+    smooth(a, n, narrow, out);
     smooth(a, n, broad, scratch);
     for (i = 0; i < n; ++i)
         out[i] -= scratch[i];
@@ -437,6 +452,7 @@ static void balance(Candidate candidates[5][360], int rings, HbnResult *out) {
 int hbn_calibrate(const HbnImage *im, const HbnSettings *s, HbnResult *out, HbnProgress progress,
                   void *context, char error[256]) {
     Candidate(*coarse)[360] = NULL, (*current)[360] = NULL;
+    GaussianKernel narrow, coarse_kernel, refined_kernel;
     double radii[5], half[] = {45, 45, 28, 45, 55}, start, stop, *memory = NULL, *profile, *score,
                      *scratch, *median;
     int n, i, ring, round, ok = 0;
@@ -471,6 +487,9 @@ int hbn_calibrate(const HbnImage *im, const HbnSettings *s, HbnResult *out, HbnP
     score = memory + n;
     scratch = memory + 2 * n;
     median = memory + 3 * n;
+    gaussian_kernel(2, &narrow);
+    gaussian_kernel(24, &coarse_kernel);
+    gaussian_kernel(10, &refined_kernel);
     memset(out, 0, sizeof *out);
     memcpy(out->values, s->initial, sizeof out->values);
     for (i = 0; i < 360; ++i) {
@@ -483,7 +502,7 @@ int hbn_calibrate(const HbnImage *im, const HbnSettings *s, HbnResult *out, HbnP
         for (j = 0; j < n; ++j)
             profile[j] = sample(im, s->initial[2] + cp * (start + .5 * j),
                                 s->initial[3] + sp * (start + .5 * j));
-        contrast(profile, n, 24, score, scratch);
+        contrast(profile, n, &narrow, &coarse_kernel, score, scratch);
         for (ring = 0; ring < 5; ++ring) {
             int low = (int)ceil((radii[ring] - half[ring] - start) / .5),
                 high = (int)ceil((radii[ring] + half[ring] - start) / .5), best;
@@ -529,7 +548,7 @@ int hbn_calibrate(const HbnImage *im, const HbnSettings *s, HbnResult *out, HbnP
                 for (j = 0; j < 49; ++j)
                     profile[j] = sample(im, curves[i][0] + nx * (-12 + .5 * j),
                                         curves[i][1] + ny * (-12 + .5 * j));
-                contrast(profile, 49, 10, score, scratch);
+                contrast(profile, 49, &narrow, &refined_kernel, score, scratch);
                 best = peak(score, 49, &strengths[i], &snrs[i], median);
                 offsets[i] = -12 + .5 * best;
                 c->point.column = curves[i][0] + nx * offsets[i];
