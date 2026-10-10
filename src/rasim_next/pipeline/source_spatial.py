@@ -442,11 +442,14 @@ def _project_gaussian_regions(
     angle_weights,
     radius,
 ):
-    out_ptr = [0]
+    out_ptr = np.empty(len(mean) + 1, dtype=np.int64)
+    out_ptr[0] = 0
     out_owner = [np.int64(0)]
     out_weight = [0.0]
     out_owner.pop()
     out_weight.pop()
+    touched = np.empty(nobs, dtype=np.int64)
+    empty_angles = np.empty((3, 0))
     sums = np.zeros(nobs)
     seen = np.zeros(nobs, np.int64)
     seen_rectangle = np.zeros(len(column_low), np.int64)
@@ -457,16 +460,14 @@ def _project_gaussian_regions(
     corner_exp = np.empty((0, 4))
     for i in range(len(mean)):
         stamp = i + 1
-        touched = [np.int64(0)]
-        touched.pop()
+        touched_count = 0
         mx, my = mean[i]
         f = factor[i]
         sx = math.sqrt(f[0, 0] ** 2 + f[0, 1] ** 2)
         beta = (f[0, 0] * f[1, 0] + f[0, 1] * f[1, 1]) / (sx * sx)
         conditional_y = abs(f[0, 0] * f[1, 1] - f[0, 1] * f[1, 0]) / sx
-        angle_coefficients = _correlation_angle_coefficients(
-            beta * sx, conditional_y, angle_nodes, angle_weights
-        )
+        angle_coefficients = empty_angles
+        coefficients_ready = False
         clow = max(0, math.ceil(mx - radius * sx - 0.5))
         chigh = min(len(ptr) - 2, math.floor(mx + radius * sx + 0.5))
         for c in range(clow, chigh + 1):
@@ -481,6 +482,11 @@ def _project_gaussian_regions(
                 rectangle = rectangle_index[j]
                 if seen_rectangle[rectangle] == stamp:
                     continue
+                if not coefficients_ready:
+                    angle_coefficients = _correlation_angle_coefficients(
+                        beta * sx, conditional_y, angle_nodes, angle_weights
+                    )
+                    coefficients_ready = True
                 value = _correlated_rectangle_probability(
                     mx,
                     my,
@@ -510,13 +516,15 @@ def _project_gaussian_regions(
                         if seen[o] != stamp:
                             seen[o] = stamp
                             sums[o] = 0.0
-                            touched.append(o)
+                            touched[touched_count] = o
+                            touched_count += 1
                         sums[o] += value * run_weight[member]
-        for o in touched:
+        for j in range(touched_count):
+            o = touched[j]
             out_owner.append(o)
             out_weight.append(sums[o])
-        out_ptr.append(len(out_owner))
-    return np.asarray(out_ptr), np.asarray(out_owner), np.asarray(out_weight)
+        out_ptr[i + 1] = len(out_owner)
+    return out_ptr, np.asarray(out_owner), np.asarray(out_weight)
 
 
 @dataclass(frozen=True, slots=True)

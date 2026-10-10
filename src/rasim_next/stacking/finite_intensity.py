@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numba
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
@@ -23,8 +24,6 @@ from rasim_next.stacking.transition import (
     _validated_registry_phase,
     registry_phase,
 )
-
-_REDUCED_MOMENT_EVENT_CHUNK_SIZE = 131_072
 
 
 def _layers(value: int) -> int:
@@ -171,6 +170,31 @@ def _finite_moment_intensity(
     )
 
 
+_finite_moment_intensity_cpu = numba.njit(nogil=True, fastmath=False, cache=False)(
+    _finite_moment_intensity
+)
+
+
+@numba.njit(nogil=True, fastmath=False, cache=False)
+def _finite_moment_events(layers, arrays, probabilities):
+    """Evaluate independent scalar lanes with constant per-event working storage."""
+    result = np.empty(len(arrays[0]))
+    for i in range(len(result)):
+        result[i] = _finite_moment_intensity_cpu(
+            layers,
+            arrays[0][i],
+            arrays[1][i],
+            arrays[2][i],
+            arrays[3][i],
+            *probabilities,
+            arrays[4][i],
+            arrays[5][i],
+            arrays[6][i],
+            arrays[7][i],
+        )
+    return result
+
+
 def finite_intensity_reduced(
     layers: int,
     f_plus: ArrayLike,
@@ -227,40 +251,17 @@ def finite_intensity_reduced(
         initial.plus,
         initial.minus,
     )
-    if f_plus_array.size > _REDUCED_MOMENT_EVENT_CHUNK_SIZE:
-        shape = f_plus_array.shape
-        result = np.empty(f_plus_array.size, dtype=np.float64)
-        flattened = tuple(
-            np.ravel(value)
-            for value in (f_plus_array, f_minus_array, omega_array, phase_array, *endpoints)
-        )
-        for start in range(0, result.size, _REDUCED_MOMENT_EVENT_CHUNK_SIZE):
-            stop = min(start + _REDUCED_MOMENT_EVENT_CHUNK_SIZE, result.size)
-            result[start:stop] = _finite_moment_intensity(
-                count,
-                flattened[0][start:stop],
-                flattened[1][start:stop],
-                flattened[2][start:stop],
-                flattened[3][start:stop],
-                *probabilities,
-                *(a[start:stop] for a in flattened[4:]),
-            )
-        return _readonly_nonnegative(
-            result.reshape(shape),
-            "finite reduced moment intensity",
-        )
-    with np.errstate(over="ignore", invalid="ignore"):
-        result = _finite_moment_intensity(
-            count,
-            f_plus_array,
-            f_minus_array,
-            omega_array,
-            phase_array,
-            *probabilities,
-            *endpoints,
-        )
+    flattened = tuple(
+        np.ravel(value) for value in (f_plus_array, f_minus_array, omega_array, phase_array)
+    )
+    flattened += (
+        tuple(np.ravel(value) for value in endpoints)
+        if endpoints
+        else (flattened[0], flattened[1], flattened[0], flattened[1])
+    )
+    result = _finite_moment_events(count, flattened, probabilities)
     return _readonly_nonnegative(
-        result,
+        result.reshape(f_plus_array.shape),
         "finite reduced moment intensity",
     )
 

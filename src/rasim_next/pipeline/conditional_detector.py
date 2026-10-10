@@ -218,6 +218,45 @@ def _response_nodes(
     )
 
 
+@numba.njit(nogil=True, fastmath=False, cache=False)
+def _contract_event_mass(
+    strength,
+    cone,
+    axial_index,
+    integrated_coefficient,
+    radial_q2,
+    normal_q2,
+    u_radial,
+    u_normal,
+    weight,
+    attenuation_ratio,
+    probability,
+    result,
+):
+    """One event-weight equation, optionally accumulated directly into CSR regions."""
+    for component in range(len(cone)):
+        for i in range(len(axial_index)):
+            index = axial_index[i]
+            mass = (
+                strength[0, index] * cone[component, 0, i]
+                + strength[1, index] * cone[component, 1, i]
+            )
+            coefficient = (
+                integrated_coefficient[i]
+                * weight
+                * np.exp(-u_radial * radial_q2[i] - u_normal * normal_q2[i])
+            )
+            if attenuation_ratio is not None:
+                coefficient *= attenuation_ratio[i]
+            mass *= coefficient
+            if probability is None:
+                result[component, i] = mass
+            else:
+                data, indices, indptr = probability
+                for j in range(indptr[i], indptr[i + 1]):
+                    result[component, indices[j]] += data[j] * mass
+
+
 def _event_mass(
     nodes: FiberResponseNodes,
     strength: FloatArray,
@@ -227,9 +266,19 @@ def _event_mass(
     weight: float,
     cone_quadrature_order: int = 16,
     cone_density: FloatArray | None = None,
+    *,
+    probability: csr_matrix | None = None,
 ) -> FloatArray:
     """Shared exact SF/cone contraction, before native-region or pixel deposition."""
     index = nodes.axial_index
+    if (
+        strength.ndim != 2
+        or strength.shape[0] != 2
+        or np.max(index, initial=-1) >= strength.shape[1]
+    ):
+        raise ValueError("signed strength must have two rows covering every axial index")
+    if probability is not None and probability.shape[0] != len(index):
+        raise ValueError("sparse probability rows must align with event nodes")
     if cone_density is None:
         cone_density = np.array(
             [
@@ -239,23 +288,36 @@ def _event_mass(
                 for opening in (nodes.cone_angle_rad, np.pi - nodes.cone_angle_rad)
             ]
         )
-    mass = (
-        strength[0, index] * cone_density[..., 0, :] + strength[1, index] * cone_density[..., 1, :]
-    )
-    coefficient = (
-        nodes.integrated_coefficient
-        * weight
-        * np.exp(
-            -envelope.u_radial_A2 * nodes.phase_q_radial_squared_Ainv2
-            - envelope.u_normal_A2 * nodes.phase_q_normal_squared_Ainv2
-        )
-    )
+    if cone_density.ndim < 2 or cone_density.shape[-2:] != (2, len(index)):
+        raise ValueError("cone density must align with both signs and event nodes")
     decay = nodes.attenuation_decay_sum_Ainv
-    if decay is not None:
-        coefficient *= uniform_depth_attenuation(
-            decay, 0.0, thickness_A
-        ) / uniform_depth_attenuation(decay, 0.0, nodes.reference_thickness_A)
-    return mass * coefficient
+    attenuation_ratio = (
+        None
+        if decay is None
+        else uniform_depth_attenuation(decay, 0.0, thickness_A)
+        / uniform_depth_attenuation(decay, 0.0, nodes.reference_thickness_A)
+    )
+    leading_shape = cone_density.shape[:-2]
+    component_count = int(np.prod(leading_shape, dtype=np.int64))
+    count = len(index) if probability is None else probability.shape[1]
+    result = np.zeros((component_count, count))
+    _contract_event_mass(
+        strength,
+        cone_density.reshape(component_count, 2, len(index)),
+        index,
+        nodes.integrated_coefficient,
+        nodes.phase_q_radial_squared_Ainv2,
+        nodes.phase_q_normal_squared_Ainv2,
+        envelope.u_radial_A2,
+        envelope.u_normal_A2,
+        weight,
+        attenuation_ratio,
+        None
+        if probability is None
+        else (probability.data, probability.indices, probability.indptr),
+        result,
+    )
+    return result.reshape((*leading_shape, count))
 
 
 @dataclass(frozen=True, slots=True)
@@ -330,7 +392,7 @@ class NativeFixedResponse:
         )
         result = np.zeros(self.observation_count)
         for block_index, (nodes, probability) in enumerate(self.blocks):
-            mass = _event_mass(
+            result += _event_mass(
                 nodes,
                 tables[nodes.grid_index],
                 density,
@@ -341,8 +403,8 @@ class NativeFixedResponse:
                 * detector.incident.states.source_weight[nodes.source_state_index],
                 detector.integration_rule.cone_quadrature_order,
                 None if cone_density is None else cone_density.values[block_index],
+                probability=probability,
             )
-            result += probability.T @ mass
         if np.any(~np.isfinite(result)) or np.any(result < 0):
             raise FloatingPointError("invalid complete fixed native response")
         return result
@@ -721,7 +783,16 @@ class ConditionalStructureDetector:
                 gaussian_tail_radius=self.gaussian_tail_radius,
             )
             retained = np.flatnonzero(np.diff(probability.indptr))
-            probability = probability[retained]
+            # Removing empty rows changes only row pointers, not nonzero order.
+            probability = csr_matrix(
+                (
+                    probability.data,
+                    probability.indices,
+                    np.concatenate((probability.indptr[retained], probability.indptr[-1:])),
+                ),
+                shape=(len(retained), probability.shape[1]),
+                copy=False,
+            )
             nodes = _response_nodes(batch, grid_ids[key], retained)
             retained_bytes += sum(
                 value.nbytes

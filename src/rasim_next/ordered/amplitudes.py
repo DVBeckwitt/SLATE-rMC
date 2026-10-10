@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import numba
 import numpy as np
 import xraydb
 from numpy.typing import ArrayLike, NDArray
@@ -50,6 +51,30 @@ def _validated_site_displacement_tensors(value: ArrayLike, site_count: int) -> N
     tensors = 0.5 * (tensors + np.swapaxes(tensors, 1, 2))
     tensors.setflags(write=False)
     return tensors
+
+
+@numba.njit(nogil=True, fastmath=False, cache=False)
+def _geometric_site_sum(q_vectors, q_magnitude, positions, occupancy, u_iso, tensors):
+    """Positive-phase species sum without query-by-site intermediate arrays."""
+    result = np.empty(len(q_vectors), dtype=np.complex128)
+    for i in range(len(q_vectors)):
+        qx, qy, qz = q_vectors[i]
+        total = 0.0j
+        for j in range(len(positions)):
+            phase = qx * positions[j, 0] + qy * positions[j, 1] + qz * positions[j, 2]
+            if u_iso is not None:
+                exponent = q_magnitude[i] ** 2 * u_iso[j]
+            elif tensors is not None:
+                u = tensors[j]
+                ux = qx * u[0, 0] + qy * u[1, 0] + qz * u[2, 0]
+                uy = qx * u[0, 1] + qy * u[1, 1] + qz * u[2, 1]
+                uz = qx * u[0, 2] + qy * u[1, 2] + qz * u[2, 2]
+                exponent = max(qx * ux + qy * uy + qz * uz, 0.0)
+            else:
+                raise ValueError("a displacement law is required")
+            total += np.exp(1.0j * phase) * np.exp(-0.5 * exponent) * occupancy[j]
+        result[i] = total
+    return result
 
 
 def unit_cell_amplitude(
@@ -157,8 +182,16 @@ def unit_cell_amplitude(
     q_magnitude = np.linalg.norm(q_vectors, axis=1)
     fractional = np.asarray([site.fractional for site in crystal.sites], dtype=np.float64)
     positions_A = fractional @ crystal.direct_basis_A.T
-    phase = np.exp(1.0j * (q_vectors @ positions_A.T))
-    if displacement_tensor is None and site_displacement_tensors is None:
+    u_iso = None
+    tensors = site_displacement_tensors
+    if displacement_tensor is not None:
+        isotropic_u_A2 = float(displacement_tensor[0, 0])
+        if np.array_equal(displacement_tensor, isotropic_u_A2 * np.eye(3)):
+            # Shared tensors admit roundoff-sized negative eigenvalues.
+            u_iso = np.full(len(crystal.sites), max(isotropic_u_A2, 0.0))
+        else:
+            tensors = np.broadcast_to(displacement_tensor, (len(crystal.sites), 3, 3))
+    elif tensors is None:
         u_iso = np.asarray(
             [
                 unknown_u_iso_A2 if site.u_iso_A2 is None else site.u_iso_A2
@@ -166,31 +199,7 @@ def unit_cell_amplitude(
             ],
             dtype=np.float64,
         )
-        damping = np.exp(-0.5 * q_magnitude[:, None] ** 2 * u_iso[None, :])
-    elif displacement_tensor is not None:
-        isotropic_u_A2 = float(displacement_tensor[0, 0])
-        if np.array_equal(displacement_tensor, isotropic_u_A2 * np.eye(3)):
-            exponent = q_magnitude**2 * isotropic_u_A2
-        else:
-            exponent = np.einsum(
-                "ni,ij,nj->n",
-                q_vectors,
-                displacement_tensor,
-                q_vectors,
-                optimize=True,
-            )
-        damping = np.exp(-0.5 * np.maximum(exponent, 0.0))[:, None]
-    else:
-        exponent = np.einsum(
-            "ni,sij,nj->ns",
-            q_vectors,
-            site_displacement_tensors,
-            q_vectors,
-            optimize=True,
-        )
-        damping = np.exp(-0.5 * np.maximum(exponent, 0.0))
     occupancy = np.asarray([site.occupancy for site in crystal.sites], dtype=np.float64)
-    site_sum = phase * damping * occupancy[None, :]
 
     amplitude = np.zeros(q_vectors.shape[0], dtype=np.complex128)
     inverted_amplitude = np.zeros_like(amplitude) if inverse is not None else None
@@ -212,7 +221,14 @@ def unit_cell_amplitude(
             q_magnitude_Ainv=q_magnitude,
             wavelength_A=wavelength_flat,
         )
-        geometric_sum = np.sum(site_sum[:, mask], axis=1)
+        geometric_sum = _geometric_site_sum(
+            q_vectors,
+            q_magnitude,
+            positions_A[mask],
+            occupancy[mask],
+            None if u_iso is None else u_iso[mask],
+            None if tensors is None else tensors[mask],
+        )
         amplitude += factor * geometric_sum
         if inverted_amplitude is not None:
             # G_species(-Q) = conj(G_species(Q)); anomalous f is NOT conjugated.

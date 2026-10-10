@@ -1108,3 +1108,35 @@ preparation copies, shared geometry and process/JIT memory require separate boun
 The adaptive estimator benefits from the compiled cone arithmetic but does not
 reuse fixed-response packets. This acceleration adds no optimizer and changes no
 background, covariance, preservation gate or fit-qualification requirement.
+
+
+### Shared structure and response kernels
+
+Material bindings also share the compiled species-level atomic sum in
+`ordered/amplitudes.py`. It evaluates positive complex phase, occupancy and
+isotropic/shared/site displacement damping without query-by-site phase and
+damping arrays. XrayDB remains the scattering-factor authority, including
+anomalous terms: inverted geometric sums are conjugated, atomic factors are not.
+The existing tensor validation and admitted-roundoff clamp remain in force.
+
+The generic finite-stack API evaluates independent scalar event lanes using the
+same centered-moment recurrence as the CPU detector. CUDA compiles the same
+authoritative Python equation. Endpoint motifs, registry phases, initial
+populations and raw intensity normalization are unchanged. First/last defaults
+alias the base amplitude arrays, and per-event working storage is constant in
+layer count. Public broadcasting and read-only results remain unchanged.
+
+Native region preparation reuses observation scratch space, prepares correlation
+coefficients only for events reaching candidate rectangles, and removes empty
+sparse rows by compacting row pointers while sharing their nonzero arrays. The
+rectangle equations, membership ordering and probability accumulation order are
+unchanged. Fixed-response evaluation fuses signed event weighting with serial
+sparse accumulation, avoiding separate event-mass buffers. Direct pixel callers
+use the same event-weight equation. Shape/index checks precede compiled access;
+attenuation continues through its existing owner.
+
+These kernels use the existing Numba native CPU compiler with no added dependency
+or C-extension build requirement. New arithmetic uses float64/complex128 without
+fast-math; the existing Gaussian projector keeps its declared rule and arithmetic.
+First-call compilation is setup cost. Measured kernel gains are workload-specific;
+they neither select CPU versus CUDA differently nor waive numerical/fit gates.

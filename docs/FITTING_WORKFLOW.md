@@ -882,3 +882,72 @@ numeric references/results, exact caller and runtime sources. Component, boundar
 and initial slower-kernel evidence are retained externally as separate immutable
 `.ra_diag.npz` packs. All background, preservation and fit-qualification limitations
 from the preceding stage remain. No assessment runner was added to the repository.
+
+
+### October 9 shared structure and response acceleration
+
+Four additional changes apply through shared owners: compiled atomic species
+sums, scalar lanes of the existing finite-stack recurrence, reduced sparse
+projection allocations, and fused event weighting/region accumulation. They use
+the existing Numba compiler and add no C extension, material-specific branch or
+dependency. The CPU/CUDA selection policy and all fitting gates are unchanged.
+See [shared kernels](NATIVE_REFINEMENT.md#shared-structure-and-response-kernels).
+
+The external component check compared the parent `400286e` implementation with
+Bi2Se3, Bi2Te3, PbI2 2H and PbI2 6H inputs, including both amplitude signs, two
+wavelengths, isotropic/shared/site displacement tensors and admitted tensor
+roundoff. Independent positive-phase sums checked complex amplitudes. Independent
+short-stack path enumeration checked the generic recurrence with asymmetric and
+deterministic transitions, endpoint motifs and mixed/pure initial populations.
+Scalar, empty, broadcast and large batches retained their public behavior.
+The allowance remained 2e-12 times the declared physical scale plus 32 float64
+tiny units; the largest fraction of that allowance was 0.002027.
+
+On one thread after compilation, five paired 32768-query Bi2Se3 amplitude timings
+had medians 30.4175 ms before and 17.5805 ms after (1.73 times faster). Three paired
+16384-event, 64-layer recurrence timings had medians 21.5499 ms and 16.2855 ms
+(1.32 times faster). These component measurements exclude first-call compilation
+and do not establish a full-fit speedup. The 114 numerical comparisons and exact
+caller/runtime sources are retained in `shared_native_components_alias.ra_diag.npz`
+(SHA256 `cb14f719c6a88f1c5f5113d8418ef7355ceb55601b6591926d296c875e8f2e25`).
+
+The initially labeled strided fixture had become contiguous through arithmetic.
+A separate two-case check used actual positive/negative-stride complex views,
+with default and distinct endpoint motifs; both passed without changing inputs.
+Its exact method and arrays are in `shared_native_strided.ra_diag.npz` (SHA256
+`5c274469fac79a8083bf84f4b5d3ac538fa2915d4a0b3b9805d0a1477ed25192`).
+
+The complete nominal combined-region response check compared all 160 projection
+blocks, covering 2616817 input events and 28162060 sparse nonzeros. CSR data,
+indices and row pointers were bitwise identical. Empty-row compaction shared
+nonzero storage and avoided 337944720 bytes of copying across construction; this
+is cumulative avoided traffic, not a measured reduction in peak process memory.
+Paired projection totals were 377.5176 seconds before and 377.3408 seconds after,
+including their first-call compilation. This does not establish a projection
+speedup. The validation ran both versions per block, so its 767.1952-second
+response construction is not the new production setup time. Retained response
+size remained 458624780 bytes.
+
+Full predictions at the original vector, structural probe and restored start
+agreed with both the parent implementation and saved raw predictions within
+the unchanged per-element 2e-12 relative plus 32 float64 tiny allowance. The
+structural-contrast relative L2 difference was 4.065069e-14, below 2e-8. Direct
+and fused event masses also agreed for regular/local nodes, component axes and
+empty inputs; malformed shapes and out-of-range axial indices were rejected.
+
+With cone reuse enabled in both versions, three paired one-thread complete
+restored-start contractions had medians 1.122620 seconds before and 0.715974
+seconds after (1.57 times faster, 36.2% less time). These timings exclude geometry
+setup and cone preparation. No higher-rule speedup, optimizer convergence or new
+fit completion is implied. The check closed successfully after 805.0286 seconds;
+`shared_native_detector_bound.ra_diag.npz` retains all 119 exact current runtime
+sources, caller and numerical evidence (SHA256
+`9311a58afcf64f245a1dafac7740c12b38f9dee74dc2e69134231012863d79f3`).
+
+The initial failed component compiler attempt and detector check's incorrect
+attribute lookup remain archived. Repairs preserved tensor-roundoff clamping,
+shared recurrence ownership, one-time flattening and compiled-access bounds.
+The component archive precedes the final event-mass boundary checks; its tested
+amplitude/stacking owners match final bytes, while the detector archive includes
+and exercises those final checks. No scientific tolerance, background handling
+or fit-qualification state changed. Disposable checks stay outside the repository.

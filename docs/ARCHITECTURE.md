@@ -14,6 +14,13 @@ wrapped law for other widths. No material-specific acceleration path is introduc
 The default strength-Gauss option retains adaptive candidate preparation. Gaussian
 probabilities have one shared arithmetic owner in `source_spatial`; explicit `_source_spatial_cuda` execution changes only
 native-pixel traversal and deposition, with shared scalar probability/cancellation arithmetic. See [NATIVE_REFINEMENT.md](NATIVE_REFINEMENT.md).
+Atomic species sums compile in `ordered/amplitudes`; the authoritative finite-stack
+moment recurrence and its shared CPU dispatcher live in `stacking/finite_intensity`.
+Native region preparation reuses scratch arrays and shares CSR nonzero storage
+when removing empty rows. `conditional_detector` owns one fused event-weight
+kernel for direct masses and serial region accumulation. Python retains physical
+binding and validation; no material-specific numerical backend is added.
+
 Historical layered-stage orchestration and eager fitting-package reexports have retired;
 geometry, scan and Monte Carlo paths retain their distinct live contracts.
 

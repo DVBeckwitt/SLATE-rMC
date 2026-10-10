@@ -26,15 +26,12 @@ from rasim_next.pipeline.beam_position import (
 )
 from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
 from rasim_next.reflectivity import CompiledParrattStitch
-from rasim_next.stacking.finite_intensity import _finite_moment_intensity
+from rasim_next.stacking.finite_intensity import _finite_moment_intensity_cpu
 
 FloatArray = NDArray[np.float64]
 IntArray = NDArray[np.int64]
 BoolArray = NDArray[np.bool_]
 _FLOAT_TINY = float(np.finfo(np.float64).tiny)
-_finite_moment_intensity_cpu = numba.njit(nogil=True, fastmath=False, cache=False)(
-    _finite_moment_intensity
-)
 
 
 class CompiledPixelIntegral(NamedTuple):
