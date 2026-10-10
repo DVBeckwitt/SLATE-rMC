@@ -671,8 +671,8 @@ response, and 867.4961 seconds for optimization. SLSQP returned success in nine
 iterations with 98 fresh predictions. The endpoint is converged and its minimum
 is resolved; this was not a timeout or a failed optimizer.
 
-The 00L constraint repair worked: the endpoint RMS is 8.008137499807354,
-below the unchanged 8.008145951478705 ceiling (4.999889% above the original
+On the nominal 12/5 rule, the 00L constraint repair worked: the endpoint RMS is
+8.008137499807354, below the unchanged 8.008145951478705 ceiling (4.999889% above the original
 baseline). Its original-limit margin is 2.1107674464948545e-6. All original
 regional, 003/006 and selection preservation checks pass. Audit MAE is 0.4793451
 against original 0.4753871, within the unchanged 5% allowance. Both seed and
@@ -727,3 +727,122 @@ selection, formatting/lint and an offline wheel build. These software checks do
 not establish physical-model adequacy. Check caller bytes and failed/corrected
 analytic expectations are preserved in the external preservation-check packs;
 no assessment harness is retained in the repository.
+
+### October 9 finer-model continuation
+
+Saved-prediction re-scoring found an additional cross-resolution gap: under the
+13/6 rule, the previous feasible seed has 00L RMS 8.0870928622405 and the returned
+endpoint has RMS 8.098842892981677, both above the unchanged absolute ceiling
+8.008145951478705. The original baseline has finer-rule 00L RMS 7.695454236122185,
+but its Bragg_3 RMS 6.438610210602074 exceeds the original region's limit
+1.05 times 6.116906513640636. The baseline remains the fixed comparison reference;
+it is not automatically a feasible start on a different numerical rule.
+The 00L re-scoring is saved in `bi2se3_constrained_resolution_diagnosis.ra_diag.npz`.
+The Bragg_3 check was measured separately before launch; the new stage records
+every baseline regional metric in its fit pack.
+
+The newly authorized stage uses 13/6 throughout the objective, shared global
+scale/41-knot background profile, derivative probes and original 00L constraint.
+It keeps N=13, four sources, all 85 signed rods, seven active coordinates and the
+original detector memberships, covariance and proposal mosaic. Separate immutable
+evaluators bind 12/5 (nominal comparison), 13/6 (fit), 14/6 (axial check) and 13/7
+(angular check), with the matching local-m0 powers. Cached predictions must match
+both full parameter vector and numerical rule.
+
+The finite contract is five hours and 16 GiB sampled process RSS. Compilation
+caps are 600/1800/3300/3300 seconds with 1/3/4/4 GiB retained-response caps;
+preflight allows 2700 seconds, optimization 5400 seconds, final checks 600 seconds
+and scheduling reserve 300 seconds, subject to the overall deadline. Optimization
+admits at most 25 iterations and 150 fresh fitting-rule predictions, with a
+32-prediction and measured-time stopping reserve. No automatic escalation to
+14/7, second optimizer or budget increase follows failure.
+
+Restore the start using at most six actual interpolation trials from the original
+vector toward the preceding seed, at fractions 0.75, 0.5, 0.25, 0.125, 0.0625 and
+0. Select the first point passing every original preservation gate on all four
+rules. Record baseline preservation outcomes separately; only the actual start
+must be feasible. Original absolute limits never move with the numerical rule.
+Baseline and starting-point regional numerical screens remain required.
+
+Before fitting, compare the actual seven-coordinate derivative stencil: half-step
+stability at 13/6 and separate axial/angular refinement of profiled residual
+columns, objective gradients and the 00L gradient, all within the declared 5%
+relative budgets. Use the solver's 2*r-transpose*J objective derivative; retain
+finite objective secants separately. Bound the actual descent trial by parameter
+bounds and the measured 00L margin/gradient on each refined rule. Its improvement
+direction and objective contrast must survive both refinements before optimization.
+
+Freeze the returned endpoint before audit. Selection requires convergence,
+minimum resolution, all original preservation gates under all four rules, the
+28 fixed-scale regional screens for each declared comparison, and improvement
+against the matched original baseline. Restored-seed non-regression must hold on
+13/6, 14/6 and 13/7 with the existing 1e-10 arithmetic allowance; the known
+underresolved 12/5 seed ranking is diagnostic. All original nominal preservation
+checks remain. Separate axial/angular local agreement does not establish their
+mixed refinement, source convergence, physical adequacy or parameter identification.
+The preceding background qualifications remain unchanged.
+
+The stage closed at 10689.9539 seconds (2 h 58 min) with
+`status="stopped"`, `closed_stage="preflight"`, `optimizer_started=false` and
+`completed_fit=false`. All four responses compiled once, in 380.0737, 1458.4764,
+2978.8105 and 3019.3741 seconds. Peak sampled process RSS was 10013560832 bytes.
+The baseline passed all 84 regional numerical screens. The first restoration
+trial, fraction 0.75, passed every original preservation gate on all four rules
+and all 84 starting-point numerical screens. It is a feasible warm start, not a
+converged fit or a selected endpoint.
+
+| Numerical rule | Original objective | Restored-start objective | Restored 00L RMS |
+| --- | ---: | ---: | ---: |
+| Nominal 12/5 | 243064.368212 | 241500.664069 | 7.816289402 |
+| Fitting 13/6 | 243006.989624 | 241574.315998 | 7.901333337 |
+| Axial 14/6 | 244108.758588 | 242611.735181 | 7.989006127 |
+| Angular 13/7 | 243014.382304 | 241581.702099 | 7.901318204 |
+
+The absolute 00L ceiling remains 8.008145951478705. The fitting-rule warm-start
+objective is about 0.590% lower than the matching original baseline; it must not
+be presented as an improvement over the preceding infeasible seed or as a new
+best converged fit. Background, source and parameter-identification qualifications
+remain unchanged.
+
+Execution cost prevented completion of derivative preflight. The nominal/fitting
+seed replays took 7.6132/41.4786 seconds, but the restored-start predictions took
+68.9863/245.8431/469.9846/512.0858 seconds across the four rules. The first fitting
+full/half-step predictions took 261.7142/263.8888 seconds. Both were preserved;
+the second returned after the 2700-second preflight allowance, and the caller
+stopped at its post-prediction resource check. The deadline is cooperative between
+predictions, so preflight lasted approximately 46.6 minutes. No complete derivative
+screen, optimizer iteration, endpoint selection or physical adoption occurred.
+
+A post-stop re-score used only the three retained fitting-rule arrays for the
+first coordinate, `bi_fractional_z`. Full/half physical steps were 5e-7/2.5e-7.
+Relative disagreements were 0.002496% for the profiled residual slope, 0.028476%
+for the solver objective gradient and 0.281065% for the 00L constraint gradient,
+below their declared 5% budgets. The separate objective-secant disagreement was
+2.045352%; it is diagnostic and does not add an acceptance gate.
+This one column shows no derivative defect; the other six columns, independent
+refinement of derivatives and a fitted minimum remain unqualified. No detector
+prediction was added. Exact method and results are in
+`bi2se3_finer_closure.ra_diag.npz` (SHA256
+`bb954c02a9a76c3fc2cc4fc0ce241193ed448956e61727d5f294e0359e16dc44`).
+
+Read-only live stack samples located work in `cone_average_sr_inv`, reached from
+`_event_mass` and `NativeFixedResponse.evaluate`, during restored-start fitting and
+axial predictions. Original and old-seed axial response identities matched, and
+all 119 runtime source files matched the launch archive. These samples identify
+a cost centre, not the complete cause of the slowdown. The existing event-mass
+owner accepts precomputed cone densities, but this response evaluator recomputes
+them on every prediction. A future repair should measure and reuse density work
+whose mosaic/geometry dependencies are unchanged, and expose per-prediction
+progress and cooperative cancellation inside long contractions. No such repair,
+new optimizer or larger numerical rule was introduced in this finite stage.
+
+The external fit evidence is `bi2se3_finer_combined_fit.ra_diag.npz` (SHA256
+`f8cbafa3b89735d2696ad063b55ecb0f76b9ac8beef648808df8bd8ffd55a4f0`), and its signed
+report is `bi2se3_finer_signed_report.ra_diag.npz` (SHA256
+`a68b7dcb3759045dd78df3cce612375755ea6b31d2303bac61d0a8b926a50a80`). The report
+preserves signed measurements, masks uncomputed rows, separates negative runs
+across invalid gaps, records background support/control diagnostics and binds the
+13/6 stitch state. Its figure labels the candidate as a feasible start with an
+incomplete fit; the detector overlays match exactly the 482 fitted profile rows.
+The joint objective also retains 979 Bragg cells, which this profile figure does
+not independently display. No production or retained assessment code changed.
