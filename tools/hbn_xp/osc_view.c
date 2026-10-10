@@ -230,14 +230,14 @@ static void paint_canvas(App *a, HDC dc, RECT bounds) {
             }
         SelectObject(dc, old);
         DeleteObject(pen);
+        HBRUSH brush = CreateSolidBrush(RGB(255, 100, 70));
         for (i = 0; i < a->result.point_count; ++i) {
             int x = (int)((a->result.points[i].column - a->left) * a->zoom),
                 y = (int)((a->result.points[i].row - a->top) * a->zoom);
             RECT dot = {x - 2, y - 2, x + 3, y + 3};
-            HBRUSH brush = CreateSolidBrush(RGB(255, 100, 70));
             FillRect(dc, &dot, brush);
-            DeleteObject(brush);
         }
+        DeleteObject(brush);
     }
     {
         int x = (int)((a->selected_column - a->left) * a->zoom),
@@ -335,13 +335,20 @@ LRESULT CALLBACK canvas_proc(HWND w, UINT message_id, WPARAM wp, LPARAM lp) {
         EndPaint(w, &ps);
         return 0;
     }
-    case WM_SIZE:
+    case WM_SIZE: {
+        int old_width = a->view_width, old_height = a->view_height;
         a->view_width = LOWORD(lp);
         a->view_height = HIWORD(lp) > 140 ? HIWORD(lp) - 140 : 1;
         if (a->zoom <= 0)
             fit_view(a);
+        else {
+            /* Keep the same native detector point at the viewport center. */
+            a->left += (old_width - a->view_width) / (2 * a->zoom);
+            a->top += (old_height - a->view_height) / (2 * a->zoom);
+        }
         a->view_dirty = 1;
         return 0;
+    }
     case WM_LBUTTONDOWN: {
         int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp), c, r;
         if (a->worker || !view_coordinate(a, x, y, &c, &r))

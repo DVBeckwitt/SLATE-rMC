@@ -175,7 +175,7 @@ static double bin_value(const App *a, size_t i) {
 static void map_bitmap(App *a, RECT plot) {
     int w = plot.right - plot.left, h = plot.bottom - plot.top, x, y;
     size_t i, n = (size_t)a->integration.grid.theta_bins * a->integration.grid.phi_bins;
-    double low = DBL_MAX, high = -DBL_MAX;
+    double low = DBL_MAX, high = -DBL_MAX, denominator;
     if (w <= 0 || h <= 0)
         return;
     if (a->angle_bitmap_width != w || a->angle_bitmap_height != h) {
@@ -205,6 +205,7 @@ static void map_bitmap(App *a, RECT plot) {
         low = 0;
     if (high <= low)
         high = low + 1;
+    denominator = a->logarithmic ? log1p(high - low) : high - low;
     for (y = 0; y < h; ++y)
         for (x = 0; x < w; ++x) {
             int t = x * a->integration.grid.theta_bins / w,
@@ -213,9 +214,9 @@ static void map_bitmap(App *a, RECT plot) {
             double value = bin_value(a, index);
             unsigned char gray = 45;
             if (isfinite(value)) {
-                double v = fmax(0, value - low), range = high - low;
-                gray = (unsigned char)(255 * fmin(1, a->logarithmic ? log1p(v) / log1p(range)
-                                                                    : v / range));
+                double v = fmax(0, value - low);
+                gray =
+                    (unsigned char)(255 * fmin(1, (a->logarithmic ? log1p(v) : v) / denominator));
             }
             a->angle_bgr[4 * at] = gray;
             a->angle_bgr[4 * at + 1] = gray;
@@ -235,20 +236,32 @@ static void angular_profile(App *a, HDC dc, RECT box, int phi) {
     HPEN pen, old;
     if (w < 2 || h < 2)
         return;
-    v = (double *)malloc(n * sizeof *v);
-    if (!v)
-        return;
-    for (i = 0; i < n; ++i) {
-        double s = 0, area = 0;
-        for (j = 0; j < other; ++j) {
-            size_t at = phi ? (size_t)i * other + j : (size_t)j * n + i;
-            s += r->signal[at];
-            area += r->area[at];
+    v = a->angle_profiles[phi];
+    if (!v || a->angle_profile_mode[phi] != a->output_mode) {
+        if (!v)
+            v = (double *)malloc(n * sizeof *v);
+        if (!v) {
+            SetWindowTextA(a->stage_label, "Not enough memory for angular profiles.");
+            return;
         }
-        v[i] = area > 0 ? (a->output_mode == OUTPUT_SUM    ? s
-                           : a->output_mode == OUTPUT_AREA ? area
-                                                           : s / area)
-                        : NAN;
+        /* Preserve the export reduction order, including signed and empty bins.
+           The owner frees these display caches whenever integration is invalidated. */
+        for (i = 0; i < n; ++i) {
+            double s = 0, area = 0;
+            for (j = 0; j < other; ++j) {
+                size_t at = phi ? (size_t)i * other + j : (size_t)j * n + i;
+                s += r->signal[at];
+                area += r->area[at];
+            }
+            v[i] = area > 0 ? (a->output_mode == OUTPUT_SUM    ? s
+                               : a->output_mode == OUTPUT_AREA ? area
+                                                               : s / area)
+                            : NAN;
+        }
+        a->angle_profiles[phi] = v;
+        a->angle_profile_mode[phi] = a->output_mode;
+    }
+    for (i = 0; i < n; ++i) {
         if (isfinite(v[i])) {
             lo = fmin(lo, v[i]);
             hi = fmax(hi, v[i]);
@@ -288,7 +301,6 @@ static void angular_profile(App *a, HDC dc, RECT box, int phi) {
         RECT marker = {box.left + 6, box.top + 18, box.left + 6 + w, box.bottom - 20};
         cif_angle_marker(a, dc, marker);
     }
-    free(v);
 }
 static void paint_angles(App *a, HDC dc, RECT bounds) {
     RECT p = plot_rect(a);
