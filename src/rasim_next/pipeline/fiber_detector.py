@@ -309,6 +309,28 @@ def native_angular_resolution_regions(
     return np.column_stack((regions, width))
 
 
+@numba.njit(nogil=True, fastmath=False, cache=False)
+def _fiber_ewald_coordinates(ell, azimuth, r, offset, b3, k, cutoff, ki, axis, first, second):
+    q_sample = np.empty((len(ell), 3))
+    kf = np.empty_like(q_sample)
+    cone = np.empty(len(ell))
+    coefficient = np.zeros(len(ell))
+    for i in range(len(ell)):
+        w = offset + b3 * ell[i]
+        q = np.hypot(r, w)
+        along = -q * q / (2 * k)
+        transverse = q * np.sqrt(max(0.0, 1.0 - (q / (2 * k)) ** 2))
+        cosine, sine = np.cos(azimuth[i]), np.sin(azimuth[i])
+        for j in range(3):
+            direction = cosine * first[j] + sine * second[j]
+            q_sample[i, j] = along * axis[j] + transverse * direction
+            kf[i, j] = q_sample[i, j] + ki[j]
+        cone[i] = np.arctan2(r, w)
+        if q > 0 and cutoff is not None and abs(w) <= cutoff:
+            coefficient[i] = b3 / q
+    return q_sample, kf, cone, coefficient
+
+
 def fiber_ewald_coordinates(
     *,
     ki_sample_Ainv: ArrayLike,
@@ -340,15 +362,15 @@ def fiber_ewald_coordinates(
     k = np.linalg.norm(ki)
     cutoff = elastic_axial_cutoff_Ainv(ki_sample_Ainv=ki, radial_Ainv=r)
     axis, first, second = _ewald_frame(ki)
-    w = offset + b3 * ell
-    q = np.hypot(r, w)
-    supported = (q > 0) & (False if cutoff is None else (np.abs(w) <= cutoff))
-    along = -q * q / (2 * k)
-    transverse = q * np.sqrt(np.maximum(0.0, 1.0 - (q / (2 * k)) ** 2))
-    direction = np.cos(azimuth)[..., None] * first + np.sin(azimuth)[..., None] * second
-    q_sample = along[..., None] * axis + transverse[..., None] * direction
-    coefficient = np.divide(b3, q, out=np.zeros_like(q), where=supported)
-    return q_sample, q_sample + ki, np.arctan2(r, w), coefficient
+    q_sample, kf, cone, coefficient = _fiber_ewald_coordinates(
+        ell.ravel(), azimuth.ravel(), r, offset, b3, k, cutoff, ki, axis, first, second
+    )
+    return (
+        q_sample.reshape((*ell.shape, 3)),
+        kf.reshape((*ell.shape, 3)),
+        cone.reshape(ell.shape),
+        coefficient.reshape(ell.shape),
+    )
 
 
 @dataclass(frozen=True, slots=True)

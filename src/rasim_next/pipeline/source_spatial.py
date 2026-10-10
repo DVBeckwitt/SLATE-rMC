@@ -427,22 +427,126 @@ def _correlated_rectangle_probability(
     return value
 
 
-@numba.njit(nogil=True)
+def _rectangle_tree(rectangles):
+    """Balanced spatial bounds over unique rectangles; leaves hold at most eight."""
+    permutation = np.arange(len(rectangles), dtype=np.int64)
+    centers = (rectangles[:, (0, 2)] + rectangles[:, (1, 3)]) / 2
+    bounds, ranges, children = [], [], []
+    pending = [(0, len(rectangles), -1, 0)]
+    while pending:
+        start, stop, parent, side = pending.pop()
+        node = len(bounds)
+        if parent >= 0:
+            children[parent][side] = node
+        selected = permutation[start:stop]
+        boxes = rectangles[selected]
+        bounds.append(
+            (boxes[:, 0].min() + 0.5, boxes[:, 1].max() - 0.5, boxes[:, 2].min(), boxes[:, 3].max())
+        )
+        ranges.append((start, stop))
+        children.append([-1, -1])
+        if stop - start > 8:
+            axis = int(np.argmax(np.ptp(centers[selected], axis=0)))
+            middle = (stop - start) // 2
+            order = np.argpartition(centers[selected, axis], middle)
+            permutation[start:stop] = selected[order]
+            pending.extend(((start + middle, stop, node, 1), (start, start + middle, node, 0)))
+    return np.asarray(bounds), np.column_stack((ranges, children)), permutation
+
+
+@register_jitable
+def _rectangle_visit_order(
+    mx,
+    my,
+    beta,
+    yr,
+    clow,
+    chigh,
+    rectangles,
+    rank,
+    bounds,
+    tree,
+    permutation,
+    keys,
+    stack,
+):
+    """First accepted integer column, retaining the original floating predicates."""
+    count = 0
+    if clow > chigh:
+        return count
+    # Balanced int64-sized trees need fewer than 64 deferred sibling slots.
+    stack[0] = 0
+    queued = 1
+    while queued:
+        queued -= 1
+        node = stack[queued]
+        a = max(clow, int(bounds[node, 0]))
+        b = min(chigh, int(bounds[node, 1]))
+        if a > b:
+            continue
+        y0, y1 = my + beta * (a - mx), my + beta * (b - mx)
+        if bounds[node, 2] > max(y0, y1) + yr or bounds[node, 3] < min(y0, y1) - yr:
+            continue
+        if tree[node, 2] >= 0:
+            stack[queued], stack[queued + 1] = tree[node, 2], tree[node, 3]
+            queued += 2
+            continue
+        for slot in range(tree[node, 0], tree[node, 1]):
+            rectangle = permutation[slot]
+            xlow, xhigh, ylow, yhigh = rectangles[rectangle]
+            left, right = max(clow, int(xlow + 0.5)), min(chigh, int(xhigh - 0.5))
+            if left > right:
+                continue
+            # Avoid division/ceil near pixel tangencies: use exactly the old
+            # comparisons on the monotone conditional-mean sequence.
+            ym = my + beta * (left - mx)
+            passed = ylow <= ym + yr if beta >= 0 else yhigh >= ym - yr
+            if not passed:
+                ym = my + beta * (right - mx)
+                if not (ylow <= ym + yr if beta >= 0 else yhigh >= ym - yr):
+                    continue
+            while not passed and left < right:
+                middle = (left + right) // 2
+                ym = my + beta * (middle - mx)
+                middle_passed = ylow <= ym + yr if beta >= 0 else yhigh >= ym - yr
+                if middle_passed:
+                    right = middle
+                else:
+                    left = middle + 1
+            ym = my + beta * (left - mx)
+            if ylow <= ym + yr and yhigh >= ym - yr:
+                keys[count] = left * len(rectangles) + rank[rectangle]
+                count += 1
+    if count < 16:
+        # Most events reach only a few rectangles; sort in owned scratch without
+        # allocating a native argsort result for every event (including misses).
+        for i in range(1, count):
+            key = keys[i]
+            j = i
+            while j > 0 and keys[j - 1] > key:
+                keys[j] = keys[j - 1]
+                j -= 1
+            keys[j] = key
+    else:
+        keys[:count].sort()
+    return count
+
+
+@numba.njit(nogil=True, fastmath=False, cache=False)
 def _project_gaussian_regions(
     mean,
     factor,
-    ptr,
-    low,
-    high,
-    prefix,
-    rectangle_index,
-    column_low,
-    column_high,
+    rectangles,
+    rank,
+    rank_to_rectangle,
+    bounds,
+    tree,
+    permutation,
     membership_ptr,
     owner,
     run_weight,
     corner_index,
-    occupied_columns,
+    ncolumns,
     nobs,
     nodes,
     weights,
@@ -452,15 +556,15 @@ def _project_gaussian_regions(
 ):
     out_ptr = np.empty(len(mean) + 1, dtype=np.int64)
     out_ptr[0] = 0
-    out_owner = [np.int64(0)]
-    out_weight = [0.0]
-    out_owner.pop()
-    out_weight.pop()
+    out_owner = np.empty(len(mean) * nobs, dtype=np.int64)
+    out_weight = np.empty(len(mean) * nobs)
+    nnz = 0
     touched = np.empty(nobs, dtype=np.int64)
     empty_angles = np.empty((3, 0))
     sums = np.zeros(nobs)
     seen = np.zeros(nobs, np.int64)
-    seen_rectangle = np.zeros(len(column_low), np.int64)
+    candidate_keys = np.empty(len(rectangles), np.int64)
+    stack = np.empty(64, np.int64)
     corner_count = int(corner_index.max()) + 1 if corner_index.size else 0
     corner_integral = np.empty(corner_count)
     corner_stamp = np.zeros(corner_count, np.int64)
@@ -477,65 +581,67 @@ def _project_gaussian_regions(
         angle_coefficients = empty_angles
         coefficients_ready = False
         clow = max(0, math.ceil(mx - radius * sx - 0.5))
-        chigh = min(len(ptr) - 2, math.floor(mx + radius * sx + 0.5))
-        first = np.searchsorted(occupied_columns, clow)
-        stop_column = np.searchsorted(occupied_columns, chigh, side="right")
-        for column_slot in range(first, stop_column):
-            c = occupied_columns[column_slot]
-            ym = my + beta * (c - mx)
-            yr = 0.5 * abs(beta) + radius * conditional_y
-            a, b = ptr[c], ptr[c + 1]
-            start = a + np.searchsorted(prefix[a:b], ym - yr)
-            stop = a + np.searchsorted(low[a:b], ym + yr, side="right")
-            for j in range(start, stop):
-                if high[j] < ym - yr:
-                    continue
-                rectangle = rectangle_index[j]
-                if seen_rectangle[rectangle] == stamp:
-                    continue
-                if not coefficients_ready:
-                    angle_coefficients = _correlation_angle_coefficients(
-                        beta * sx, conditional_y, angle_nodes, angle_weights
-                    )
-                    coefficients_ready = True
-                value = _correlated_rectangle_probability(
-                    mx,
-                    my,
-                    sx,
-                    beta,
-                    conditional_y,
-                    column_low[rectangle],
-                    column_high[rectangle],
-                    low[j],
-                    high[j],
-                    nodes,
-                    weights,
-                    radius,
-                    angle_coefficients,
-                    corner_xy,
-                    corner_exp,
-                    corner_index[rectangle],
-                    corner_integral,
-                    corner_stamp,
-                    stamp,
+        chigh = min(ncolumns - 1, math.floor(mx + radius * sx + 0.5))
+        yr = 0.5 * abs(beta) + radius * conditional_y
+        count = _rectangle_visit_order(
+            mx,
+            my,
+            beta,
+            yr,
+            clow,
+            chigh,
+            rectangles,
+            rank,
+            bounds,
+            tree,
+            permutation,
+            candidate_keys,
+            stack,
+        )
+        for j in range(count):
+            rectangle = rank_to_rectangle[candidate_keys[j] % len(rectangles)]
+            if not coefficients_ready:
+                angle_coefficients = _correlation_angle_coefficients(
+                    beta * sx, conditional_y, angle_nodes, angle_weights
                 )
-                # A later column can intersect a rectangle rejected above.
-                seen_rectangle[rectangle] = stamp
-                if value > 0:
-                    for member in range(membership_ptr[rectangle], membership_ptr[rectangle + 1]):
-                        o = owner[member]
-                        if seen[o] != stamp:
-                            seen[o] = stamp
-                            sums[o] = 0.0
-                            touched[touched_count] = o
-                            touched_count += 1
-                        sums[o] += value * run_weight[member]
+                coefficients_ready = True
+            value = _correlated_rectangle_probability(
+                mx,
+                my,
+                sx,
+                beta,
+                conditional_y,
+                rectangles[rectangle, 0],
+                rectangles[rectangle, 1],
+                rectangles[rectangle, 2],
+                rectangles[rectangle, 3],
+                nodes,
+                weights,
+                radius,
+                angle_coefficients,
+                corner_xy,
+                corner_exp,
+                corner_index[rectangle],
+                corner_integral,
+                corner_stamp,
+                stamp,
+            )
+            if value > 0:
+                for member in range(membership_ptr[rectangle], membership_ptr[rectangle + 1]):
+                    o = owner[member]
+                    if seen[o] != stamp:
+                        seen[o] = stamp
+                        sums[o] = 0.0
+                        touched[touched_count] = o
+                        touched_count += 1
+                    sums[o] += value * run_weight[member]
         for j in range(touched_count):
             o = touched[j]
-            out_owner.append(o)
-            out_weight.append(sums[o])
-        out_ptr[i + 1] = len(out_owner)
-    return out_ptr, np.asarray(out_owner), np.asarray(out_weight)
+            out_owner[nnz] = o
+            out_weight[nnz] = sums[o]
+            nnz += 1
+        out_ptr[i + 1] = nnz
+    return out_ptr, out_owner[:nnz].copy(), out_weight[:nnz].copy()
 
 
 @dataclass(frozen=True, slots=True)
@@ -555,18 +661,16 @@ class NativeSpatialRegionProjection:
         p = self.projection
         if not len(p.observation_row):
             runs = (
-                np.zeros(p.detector_shape_rc[1] + 1, dtype=np.int64),
-                np.empty(0),
-                np.empty(0),
-                np.empty(0),
+                np.empty((0, 4)),
                 np.empty(0, dtype=np.int64),
-                np.empty(0),
-                np.empty(0),
+                np.empty(0, dtype=np.int64),
+                np.empty((0, 4)),
+                np.empty((0, 4), dtype=np.int64),
+                np.empty(0, dtype=np.int64),
                 np.zeros(1, dtype=np.int64),
                 np.empty(0, dtype=np.int64),
                 np.empty(0),
                 np.empty((0, 8), dtype=np.int64),
-                np.empty(0, dtype=np.int64),
             )
             for a in runs:
                 a.setflags(write=False)
@@ -613,7 +717,9 @@ class NativeSpatialRegionProjection:
         order = np.argsort(membership, kind="stable")
         owner, weight = owner[starts][order], weight[starts][order]
         membership_ptr = np.searchsorted(membership[order], np.arange(len(rectangles) + 1))
-        column_low, column_high, low, high = rectangles.T
+        low, high = rectangles[:, 2:].T
+        if len(rectangles) > np.iinfo(np.int64).max // p.detector_shape_rc[1]:
+            raise ValueError("region traversal order exceeds int64 capacity")
         # Physical corner identities are shared by every rectangle, independent
         # of observation weights. Values are cached only within one Gaussian.
         corners = rectangles[:, np.array([[1, 3], [0, 3], [1, 2], [0, 2]])]
@@ -630,34 +736,22 @@ class NativeSpatialRegionProjection:
                 y_index.reshape(-1, 2) + next_index + int(x_index.max()) + 1,
             )
         )
-        # Index each spanned column; projection integrates each rectangle once.
-        widths = (column_high - column_low).astype(np.int64)
-        rectangle_index = np.repeat(np.arange(len(rectangles)), widths)
-        columns = (
-            np.repeat((column_low + 0.5).astype(np.int64), widths)
-            + np.arange(len(rectangle_index))
-            - np.repeat(np.cumsum(widths) - widths, widths)
-        )
-        order = np.lexsort((high[rectangle_index], low[rectangle_index], columns))
-        rectangle_index, columns = rectangle_index[order], columns[order]
-        low, high = low[rectangle_index], high[rectangle_index]
-        ptr = np.searchsorted(columns, np.arange(p.detector_shape_rc[1] + 1))
-        prefix = high.copy()
-        for c in range(p.detector_shape_rc[1]):
-            prefix[ptr[c] : ptr[c + 1]] = np.maximum.accumulate(high[ptr[c] : ptr[c + 1]])
+        # Spatial hierarchy stores each rectangle once, independent of width.
+        rank = np.empty(len(rectangles), dtype=np.int64)
+        rank_to_rectangle = np.lexsort((high, low))
+        rank[rank_to_rectangle] = np.arange(len(rectangles))
+        bounds, tree, permutation = _rectangle_tree(rectangles)
         runs = (
-            ptr,
-            low,
-            high,
-            prefix,
-            rectangle_index,
-            column_low,
-            column_high,
+            rectangles,
+            rank,
+            rank_to_rectangle,
+            bounds,
+            tree,
+            permutation,
             membership_ptr,
             owner,
             weight,
             corner_index,
-            np.flatnonzero(np.diff(ptr)),
         )
         for a in runs:
             a.setflags(write=False)
@@ -681,8 +775,12 @@ class NativeSpatialRegionProjection:
         """
         nodes, weights = _integration_rule(quadrature_order, gaussian_tail_radius)
         angle_nodes, angle_weights = nodes, weights
+        workers = 1 if executor is None else executor.region_worker_count(len(kernels.mean_px))
+        if not len(self._runs[0]) or not len(kernels.mean_px):
+            return csr_matrix((len(kernels.mean_px), self.projection.observation_count))
         arguments = (
             *self._runs,
+            self.projection.detector_shape_rc[1],
             self.projection.observation_count,
             nodes,
             weights,
@@ -690,37 +788,39 @@ class NativeSpatialRegionProjection:
             angle_weights,
             float(gaussian_tail_radius),
         )
-        workers = 1 if executor is None else executor.region_worker_count(len(kernels.mean_px))
         # Each task owns all stamps and corner scratch. Bound concurrent worst-case
         # output/scratch; the final CSR and its assembly are response storage.
-        scratch = 24 * self.projection.observation_count + 8 * len(self._runs[5])
-        scratch += 16 * (int(self._runs[10].max()) + 1 if self._runs[10].size else 0)
-        # Native lists can retain up to 25% spare capacity while arrays are copied.
-        # Use 48 bytes/nonzero plus scalar headers, and reserve angle work separately.
-        row_bytes = 48 * self.projection.observation_count + 256
+        scratch = 24 * self.projection.observation_count + 8 * len(self._runs[0])
+        scratch += 16 * (int(self._runs[9].max()) + 1 if self._runs[9].size else 0)
+        # Full-capacity contiguous output plus trimmed arrays, row pointers and
+        # angle scratch are admitted before allocating any worker output.
+        row_bytes = 32 * self.projection.observation_count + 256
         scratch += 4096 + 192 * len(angle_nodes) * 64
-        chunk_rows = (
-            0
-            if executor is None
-            else min(
-                4096, (executor.region_workspace_bytes // workers - scratch) // max(1, row_bytes)
-            )
-        )
-        if workers == 1 or chunk_rows < 32:
+        workspace = 64 * 1024**2 if executor is None else executor.region_workspace_bytes
+        while workers > 1 and workspace // workers - scratch < 32 * row_bytes:
+            workers -= 1
+        chunk_rows = min(4096, (workspace // workers - scratch) // max(1, row_bytes))
+        if chunk_rows < 1:
+            raise MemoryError("region workspace cannot hold one complete observation row")
+        parts = []
+        if workers == 1:
             if executor is not None:
-                executor._record(
-                    "cpu", "region_workers_1" if workers == 1 else "region_workspace_limit"
+                executor._record("cpu", "region_workers_1")
+            for start in range(0, len(kernels.mean_px), chunk_rows):
+                parts.append(
+                    _project_gaussian_regions(
+                        kernels.mean_px[start : start + chunk_rows],
+                        kernels.factor_px[start : start + chunk_rows],
+                        *arguments,
+                    )
                 )
-            ptr, owner, mass = _project_gaussian_regions(
-                kernels.mean_px, kernels.factor_px, *arguments
-            )
         else:
             executor._record("cpu", f"region_workers_{workers}")
             # Finish compilation before concurrent calls, without duplicating any event.
             first = _project_gaussian_regions(
                 kernels.mean_px[:1], kernels.factor_px[:1], *arguments
             )
-            parts = [first]
+            parts.append(first)
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 for start in range(1, len(kernels.mean_px), workers * chunk_rows):
                     futures = [
@@ -737,6 +837,9 @@ class NativeSpatialRegionProjection:
                         )
                     ]
                     parts.extend(future.result() for future in futures)
+        if len(parts) == 1:
+            ptr, owner, mass = parts[0]
+        else:
             offsets = np.r_[0, np.cumsum([len(p[1]) for p in parts])]
             ptr = np.r_[
                 np.concatenate(

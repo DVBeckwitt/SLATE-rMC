@@ -80,10 +80,15 @@ class BiJointModel:
         + ("angstrom",) * 3
     )
 
-    def bind(self, values, coherent_repeats):
+    def bind(self, values, coherent_repeats, *, optical_factor_cache=None):
         physical = np.asarray(values)
         candidate = BiJointCandidate(physical, coherent_repeats)
-        physics = self.atomic.bind(BiCellSiteParameters.from_array(physical[:13]))
+        parameters = BiCellSiteParameters.from_array(physical[:13])
+        physics = (
+            self.atomic.bind(parameters, optical_factor_cache=optical_factor_cache)
+            if type(self.atomic) is BiNativeStructureModel
+            else self.atomic.bind(parameters)
+        )
         stack = physics.specular_stitch_stack
         if stack is None:
             raise ValueError("Bi joint refinement requires its declared local composite")

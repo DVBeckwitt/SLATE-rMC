@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterator
-from concurrent.futures import CancelledError
+from concurrent.futures import CancelledError, ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field, fields, replace
 from functools import partial
 from itertools import pairwise
@@ -15,7 +15,7 @@ from numpy.typing import ArrayLike, NDArray
 from scipy.sparse import csr_matrix
 
 from painted_ewald import MosaicParameters, Rod
-from painted_ewald.normal_density import SphericalMosaicDensity
+from painted_ewald.normal_density import SphericalMosaicDensity, _ConeAverageGeometry
 from painted_ewald.validation import proper_rotation, reciprocal_basis, reject_complex
 from rasim_next.core.contracts import MaterialOptics, canonical_revision_sha256
 from rasim_next.geometry.instrument import CompiledInstrument
@@ -324,6 +324,17 @@ def _event_mass(
     return result.reshape((*leading_shape, count))
 
 
+def _prepare_cone_block(block, densities, node, weight):
+    nodes, _ = block
+    values = [np.empty((2, len(nodes.axial_index))) for _ in densities]
+    for sign, opening in enumerate((nodes.cone_angle_rad, np.pi - nodes.cone_angle_rad)):
+        geometry = _ConeAverageGeometry.from_angles(nodes.polar_angle_rad, opening)
+        for density, value in zip(densities, values, strict=True):
+            value[sign] = density._cone_average_prepared(geometry, node, weight)
+        del geometry
+    return values
+
+
 @dataclass(frozen=True, slots=True)
 class NativeFixedResponse:
     """Immutable nominal geometry probabilities; candidate factors stay separate."""
@@ -347,25 +358,57 @@ class NativeFixedResponse:
         self, mosaic: MosaicParameters, *, quadrature_order: int, maximum_bytes: int
     ) -> NativeConeDensity:
         """Prepare explicit candidate-mosaic values for this immutable response."""
+        return self.compile_cone_components(
+            (mosaic,), quadrature_order=quadrature_order, maximum_bytes=maximum_bytes
+        )[0]
+
+    def compile_cone_components(
+        self, mosaics: tuple[MosaicParameters, ...], *, quadrature_order: int, maximum_bytes: int
+    ) -> tuple[NativeConeDensity, ...]:
+        """Share angle geometry and quadrature across independent mosaic laws.
+
+        At most four blocks are prepared concurrently. Each block retains the
+        original 2048-event Gaussian batches. Narrow reductions are unchanged;
+        broad panel reductions use deterministic serial float64 arithmetic.
+        Geometry is temporary per block, not a retained full-response cache.
+        """
         if type(maximum_bytes) is not int or maximum_bytes < 0:
             raise ValueError("cone density memory budget must be a nonnegative integer")
         if type(quadrature_order) is not int or quadrature_order < 4:
             raise ValueError("cone quadrature order must be an integer of at least four")
-        if self.cone_density_bytes > maximum_bytes:
+        mosaics = tuple(mosaics)
+        if self.cone_density_bytes * len(mosaics) > maximum_bytes:
             raise MemoryError("cone density memory budget exhausted before allocation")
-        density = SphericalMosaicDensity(mosaic)
-        values = tuple(
-            np.array(
-                [
-                    density.cone_average_sr_inv(
-                        nodes.polar_angle_rad, opening, quadrature_order=quadrature_order
-                    )
-                    for opening in (nodes.cone_angle_rad, np.pi - nodes.cone_angle_rad)
-                ]
-            )
-            for nodes, _ in self.blocks
+        densities = tuple(SphericalMosaicDensity(mosaic) for mosaic in mosaics)
+        if not densities:
+            return ()
+        node, weight = (
+            np.polynomial.legendre.leggauss(quadrature_order)
+            if any(law.lorentzian_probability < 1 for law in mosaics) and self.blocks
+            else (np.empty(0), np.empty(0))
         )
-        return NativeConeDensity(self, density, quadrature_order, values)
+
+        values = []
+        if self.blocks:
+            # Warm the first block's active kernels before dispatching workers.
+            values.append(_prepare_cone_block(self.blocks[0], densities, node, weight))
+            workers = min(4, numba.get_num_threads(), len(self.blocks))
+            if workers > 1:
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    for start in range(1, len(self.blocks), workers):
+                        futures = [
+                            executor.submit(_prepare_cone_block, block, densities, node, weight)
+                            for block in self.blocks[start : start + workers]
+                        ]
+                        values.extend(future.result() for future in futures)
+            else:
+                values.extend(
+                    _prepare_cone_block(block, densities, node, weight) for block in self.blocks[1:]
+                )
+        return tuple(
+            NativeConeDensity(self, density, quadrature_order, tuple(block[i] for block in values))
+            for i, density in enumerate(densities)
+        )
 
     def evaluate(
         self,

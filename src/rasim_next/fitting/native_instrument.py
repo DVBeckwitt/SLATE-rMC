@@ -84,7 +84,9 @@ class NativeInstrumentModel:
             source.line_wavelength_A,
         ]
 
-    def bind(self, physics: NativeFitPhysics, values) -> NativeFitPhysics:
+    def bind(
+        self, physics: NativeFitPhysics, values, *, optical_factor_cache=None
+    ) -> NativeFitPhysics:
         values = np.asarray(values)
         if values.shape != (18,) or np.iscomplexobj(values) or np.any(~np.isfinite(values)):
             raise ValueError("instrument correction requires eighteen finite real coordinates")
@@ -116,7 +118,11 @@ class NativeInstrumentModel:
             line_wavelength_A=values[16:18],
         )
         source = definition.sample()
-        material = material_optics(physics.structure.crystals[0], source.mean_rays.wavelength_A)
+        material = material_optics(
+            physics.structure.crystals[0],
+            source.mean_rays.wavelength_A,
+            factor_cache=optical_factor_cache,
+        )
         revision = canonical_revision_sha256(
             ("definition_id", "native_instrument_candidate.v1"),
             ("structure_input", physics.input_revision),

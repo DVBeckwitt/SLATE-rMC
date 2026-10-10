@@ -10,6 +10,7 @@ from painted_ewald.mosaic import (
     _component_quadrature,
     _gaussian_exponential,
     _wrapped_gaussian_density,
+    _wrapped_gaussian_density_flat,
     _wrapped_lorentzian_density,
 )
 from painted_ewald.types import MosaicParameters
@@ -51,6 +52,70 @@ def _narrow_gaussian_cone_integral(delta, sine_product, scale, sigma, node, weig
             upper = min(np.pi, 2 * upper)
         result[i] = total
     return result
+
+
+@numba.njit(nogil=True, fastmath=False, cache=False)
+def _wrapped_gaussian_cone_integral(delta, sine_product, scale, sigma, node, weight):
+    # Preserve full 2048-event batches and global wrapped-series stopping.
+    lower = np.zeros(len(delta))
+    upper = scale.copy()
+    total = np.zeros(len(delta))
+    offset = np.sin(delta / 2) ** 2
+    angle = np.empty(len(delta) * len(node))
+    half = np.empty(len(delta))
+    while np.any(lower < np.pi):
+        for i in range(len(delta)):
+            half[i] = (upper[i] - lower[i]) / 2
+            midpoint = (upper[i] + lower[i]) / 2
+            for j in range(len(node)):
+                psi = midpoint + half[i] * node[j]
+                s = min(1.0, max(0.0, offset[i] + sine_product[i] * np.sin(psi / 2) ** 2))
+                angle[i * len(node) + j] = 2 * np.arctan2(np.sqrt(s), np.sqrt(1 - s))
+        density = _wrapped_gaussian_density_flat(angle, sigma)
+        for i in range(len(delta)):
+            panel = 0.0
+            for j in range(len(node)):
+                panel += density[i * len(node) + j] * weight[j]
+            total[i] += half[i] * panel
+            lower[i] = upper[i]
+            upper[i] = min(np.pi, 2 * upper[i])
+    return total
+
+
+@dataclass(frozen=True, slots=True)
+class _ConeAverageGeometry:
+    shape: tuple[int, ...]
+    degenerate: np.ndarray
+    degenerate_tilt: np.ndarray
+    delta: np.ndarray
+    sine_product: np.ndarray
+    endpoint_sine_squared: np.ndarray
+
+    @classmethod
+    def from_angles(cls, polar_angle_rad, cone_angle_rad):
+        reject_complex(polar_angle_rad, "polar_angle_rad")
+        reject_complex(cone_angle_rad, "cone_angle_rad")
+        polar, cone = np.broadcast_arrays(
+            np.asarray(polar_angle_rad, dtype=np.float64),
+            np.asarray(cone_angle_rad, dtype=np.float64),
+        )
+        if any(np.any(~np.isfinite(x)) or np.any((x < 0) | (x > np.pi)) for x in (polar, cone)):
+            raise ValueError("polar and cone angles must be finite and lie in [0, pi]")
+        shape = polar.shape
+        polar, cone = polar.ravel(), cone.ravel()
+        degenerate = (polar == 0) | (polar == np.pi) | (cone == 0) | (cone == np.pi)
+        degenerate_tilt = abs(polar[degenerate] - cone[degenerate])
+        polar, cone = polar[~degenerate], cone[~degenerate]
+        values = (
+            degenerate,
+            degenerate_tilt,
+            abs(polar - cone),
+            np.sin(polar) * np.sin(cone),
+            np.sin((polar + cone) / 2) ** 2,
+        )
+        for value in values:
+            value.setflags(write=False)
+        return cls(shape, *values)
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,30 +210,25 @@ class SphericalMosaicDensity:
         convolution. Lorentzian averaging is analytic; the Gaussian uses complete
         scale-resolved quadrature on [0, pi], with no angular tail truncation.
         """
-        reject_complex(polar_angle_rad, "polar_angle_rad")
-        reject_complex(cone_angle_rad, "cone_angle_rad")
-        polar, cone = np.broadcast_arrays(
-            np.asarray(polar_angle_rad, dtype=np.float64),
-            np.asarray(cone_angle_rad, dtype=np.float64),
-        )
-        if any(np.any(~np.isfinite(x)) or np.any((x < 0) | (x > np.pi)) for x in (polar, cone)):
-            raise ValueError("polar and cone angles must be finite and lie in [0, pi]")
         if type(quadrature_order) is not int or quadrature_order < 4:
             raise ValueError("quadrature_order must be an integer of at least four")
-        shape = polar.shape
-        polar, cone = polar.ravel(), cone.ravel()
-        result = np.empty(polar.size)
-        degenerate = (polar == 0) | (polar == np.pi) | (cone == 0) | (cone == np.pi)
+        geometry = _ConeAverageGeometry.from_angles(polar_angle_rad, cone_angle_rad)
+        node, weight = (
+            np.polynomial.legendre.leggauss(quadrature_order)
+            if self.parameters.lorentzian_probability < 1 and geometry.delta.size
+            else (np.empty(0), np.empty(0))
+        )
+        return self._cone_average_prepared(geometry, node, weight)
+
+    def _cone_average_prepared(self, geometry, node, weight):
+        result = np.empty(geometry.degenerate.size)
+        degenerate = geometry.degenerate
         if np.any(degenerate):
-            result[degenerate] = self.directed_density_sr_inv(
-                abs(polar[degenerate] - cone[degenerate])
-            )
+            result[degenerate] = self.directed_density_sr_inv(geometry.degenerate_tilt)
         if np.all(degenerate):
-            return result.reshape(shape)
-        polar, cone = polar[~degenerate], cone[~degenerate]
-        delta = abs(polar - cone)
-        b = np.sin(polar) * np.sin(cone)
-        out = np.zeros(polar.size)
+            return result.reshape(geometry.shape)
+        delta, b = geometry.delta, geometry.sine_product
+        out = np.zeros(len(delta))
         eta = self.parameters.lorentzian_probability
         if eta > 0:
             gamma = self.parameters.lorentzian_half_width_rad
@@ -176,7 +236,7 @@ class SphericalMosaicDensity:
             # Factor the denominator at both circle endpoints. Subtracting A²-B²
             # would lose the narrow peak when the cone touches the mean normal.
             low = h * h + 4 * rho * np.sin(delta / 2) ** 2
-            high = h * h + 4 * rho * np.sin((polar + cone) / 2) ** 2
+            high = h * h + 4 * rho * geometry.endpoint_sine_squared
             out += (
                 eta
                 * numerator
@@ -184,12 +244,11 @@ class SphericalMosaicDensity:
             )
         if eta < 1:
             sigma = self.parameters.gaussian_sigma_rad
-            node, weight = np.polynomial.legendre.leggauss(quadrature_order)
             # The minimum cone tilt is delta. Beyond 40 sigma, every wrapped
             # Gaussian image underflows (exp(-800)); there is no Gaussian work.
             # Preserve the original angle arithmetic for subnormal squared widths.
             gaussian_indices = (
-                np.arange(polar.size)
+                np.arange(len(delta))
                 if sigma < np.sqrt(np.finfo(float).tiny)
                 else np.flatnonzero(delta < 40 * sigma)
             )
@@ -208,23 +267,10 @@ class SphericalMosaicDensity:
                 else:
                     # Wide and subnormal widths retain the general wrapped law
                     # and its array-wide image/Fourier stopping rules.
-                    lower = np.zeros(len(selected))
-                    upper = scale.copy()
-                    total = np.zeros(len(selected))
-                    while np.any(lower < np.pi):
-                        half = (upper - lower) / 2
-                        psi = (upper + lower)[:, None] / 2 + half[:, None] * node
-                        sine_squared = (
-                            np.sin(dd[:, None] / 2) ** 2 + bb[:, None] * np.sin(psi / 2) ** 2
-                        )
-                        sine_squared = np.clip(sine_squared, 0, 1)
-                        angle = 2 * np.arctan2(np.sqrt(sine_squared), np.sqrt(1 - sine_squared))
-                        total += half * (_wrapped_gaussian_density(angle, sigma) @ weight)
-                        lower = upper
-                        upper = np.minimum(np.pi, 2 * upper)
+                    total = _wrapped_gaussian_cone_integral(dd, bb, scale, sigma, node, weight)
                 out[selected] += (1 - eta) * total / (np.pi**2 * self.gaussian_normalization)
         result[~degenerate] = out
-        return result.reshape(shape)
+        return result.reshape(geometry.shape)
 
     def plane_density_sr_inv(self, alpha_rad: ArrayLike) -> NDArray[np.float64]:
         """Antipodal sum per spherical area on the unoriented-normal hemisphere."""

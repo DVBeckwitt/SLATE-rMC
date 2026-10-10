@@ -1087,7 +1087,9 @@ The cone integral is shared by every material binding. Narrow Gaussian widths
 to compile the scalar quadrature with float64 arithmetic and no fast-math. The
 panels, nodes, spherical normalization and signed-cone measure are unchanged;
 only terms guaranteed to underflow to zero are skipped. Wider and subnormal widths
-retain the existing wrapped-image/Fourier calculation. First use includes native
+compile the same wrapped-image/Fourier calculation, retaining whole-array convergence
+and original 2048-event batches. Broad panel reductions are deterministic float64
+loops; pure Lorentzian and degenerate cones need no Legendre rule. First use includes native
 compilation, so distinguish that setup time from repeated candidate timing.
 
 For fixed-importance fitting, `NativeJointEvaluator` automatically retains separate
@@ -1102,11 +1104,20 @@ use the same direct calculation, without changing precision or the physical mode
 `cone_compile_count`, `cone_reuse_count` and `cone_cache_retained_bytes` expose this
 work and storage. `clear_responses()` releases all evaluator preparation caches.
 
+When both components are missing, preparation shares angle geometry and one
+quadrature rule. Independent response blocks use up to four CPU workers within
+the caller's Numba allowance. Geometry is temporary per block and is not retained
+for every response node. This also accelerates width changes that require fresh
+cone values; mixture-only changes continue to reuse the saved pure packets.
+
 Direct response callers can use `response.compile_cone_density(mosaic,
 quadrature_order=order, maximum_bytes=budget)` and pass the result as
 `response.evaluate(detector, projection, cone_density=packet)`. A mismatched owner,
 mosaic or order raises before contraction. The cap counts retained density arrays;
 preparation copies, shared geometry and process/JIT memory require separate bounds.
+`response.compile_cone_components((gaussian_law, lorentzian_law),
+quadrature_order=order, maximum_bytes=budget)` exposes joint preparation to direct
+callers. The budget must cover every requested packet together.
 The adaptive estimator benefits from the compiled cone arithmetic but does not
 reuse fixed-response packets. This acceleration adds no optimizer and changes no
 background, covariance, preservation gate or fit-qualification requirement.
@@ -1132,6 +1143,15 @@ displacement and complex amplitudes are recalculated. Bi2X3, PbI2 and generic CI
 providers opt in; arbitrary provider protocols remain unchanged. Exact signed
 strength/stitch tables have a separate `strength_cache_maximum_bytes` cap (128 MiB).
 
+The evaluator also owns an `OpticalFactorCache` for Q=0 XrayDB factors, with default
+1 MiB numeric/key storage and 256 entries. Species, charge, wavelength bytes and
+database owner/version determine reuse. Candidate occupancies, volume, density and
+material provenance are always recomputed. Built-in Bi/Pb and instrument bindings
+use it automatically; direct callers can pass `factor_cache=cache` to
+`material_optics`. Set its `maximum_bytes=0` at construction to disable retention;
+`hits`, `misses` and `retained_bytes` expose its use. This keyword-only evaluator
+resource preserves existing custom binding signatures.
+
 After repeated compatible use, fixed cone/source/envelope/attenuation factors can
 be combined into a smaller axial-to-observation matrix. Its separate
 `aggregation_cache_maximum_bytes` cap defaults to 128 MiB and accounts for retained
@@ -1142,12 +1162,16 @@ its `admission` and candidate-specific `admission_for(strength_tables)`. Zero ca
 disable the corresponding retention. These are numeric-array budgets, not process
 memory limits; Python, compilation and ordinary candidate temporaries are additional.
 
-Region projection visits only occupied detector columns. Independent event chunks
+Region projection indexes each unique rectangle once in a balanced spatial hierarchy.
+It finds the first eligible integer column with the original floating-point
+comparisons, then restores the original rectangle accumulation order. Independent event chunks
 automatically use up to four CPU workers, bounded by the caller's Numba thread allowance and
 `NativeSpatialExecutor.region_workspace_bytes` (64 MiB default). Set `region_workers=1`
 for serial operation; zero selects automatically. Final CSR arrays, completed chunks
 awaiting assembly and assembly copies are outside that concurrent workspace cap.
-`last_decision` reports admitted workers or a workspace decline. The raster CPU/GPU
+Serial and parallel paths both fill bounded contiguous buffers; insufficient space
+for even one row raises before allocation. Empty membership returns an empty CSR.
+`last_decision` reports admitted workers. The raster CPU/GPU
 selector remains unchanged; sparse region compilation remains CPU-only.
 
 `fit_native_parameters` prepares fixed background columns once automatically.
@@ -1186,5 +1210,8 @@ attenuation continues through its existing owner.
 These kernels use the existing Numba native CPU compiler with no added dependency
 or C-extension build requirement. New arithmetic uses float64/complex128 without
 fast-math; the existing Gaussian projector keeps its declared rule and arithmetic.
+Ewald coordinates, outgoing vectors and their Jacobian are prepared in one event
+loop. Continuous-Q overlap scaling also compiles its segment-length reduction and
+bisection, preserving validation, the chosen measure and termination threshold.
 First-call compilation is setup cost. Measured kernel gains are workload-specific;
 they neither select CPU versus CUDA differently nor waive numerical/fit gates.

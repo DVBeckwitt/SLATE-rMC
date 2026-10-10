@@ -65,7 +65,26 @@ all CSR row order. Its 64 MiB default region workspace limits concurrent chunk
 arrays and scratch; final CSR storage, accumulated completed chunks and assembly
 copies are separately owned response storage. Serial execution remains available
 when concurrency cannot fit. Array caps exclude Python/JIT metadata and are not
-process-RSS limits. No probability pruning or precision reduction is introduced.
+process-RSS limits. Unique-rectangle discovery preserves the original first-column,
+row-bound and stable rectangle order. Both serial and parallel CSR creation use
+bounded contiguous output chunks. Insufficient space for one complete row raises
+before allocation; empty support needs no worker scratch. No probability pruning
+or precision reduction is introduced.
+
+`NativeFixedResponse.compile_cone_components` shares angle geometry and one Legendre
+rule across missing components, with at most four independent block workers within
+the caller's Numba allowance. Retained packet arrays obey the declared byte cap;
+temporary per-block geometry and packet-copy storage are excluded. The narrow kernel
+keeps its reductions; broad panels use serial float64 reductions and the unchanged
+global wrapped-series stopping rule within each original 2048-event batch.
+
+The evaluator's keyword-only `optical_factor_cache` defaults to an explicit
+`OpticalFactorCache` with 1 MiB and 256-entry limits. Keys include the XrayDB owner,
+package/database versions, species/element/charge and exact normalized wavelength
+bytes. The byte limit includes factors and wavelength key bytes; metadata has the
+separate entry limit. Zero capacity disables retention. Material optics always
+recomputes occupied counts, physical volume, mass density and provenance. Built-in
+Bi/Pb and instrument binders opt in; existing custom binder signatures are unchanged.
 
 `NativeLinearBackgroundProblem.prepare(observations)` binds immutable normalized
 whitened background columns to the exact observation owner. Profiling whitens only

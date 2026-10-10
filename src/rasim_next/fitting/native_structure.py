@@ -56,10 +56,14 @@ def native_stitch_records(physics, arguments, stack):
     return records
 
 
-def rebind_native_structure(reference, recipe, revision):
+def rebind_native_structure(reference, recipe, revision, *, optical_factor_cache=None):
     """Recompute optics and reciprocal geometry from the occupied candidate cell."""
     reciprocal = ReciprocalLattice.from_crystal(recipe.crystals[0]).basis_Ainv
-    material = material_optics(recipe.crystals[0], reference.source.mean_rays.wavelength_A)
+    material = material_optics(
+        recipe.crystals[0],
+        reference.source.mean_rays.wavelength_A,
+        factor_cache=optical_factor_cache,
+    )
     rod_revision = reference.rod_catalog_revision
     if not np.array_equal(reciprocal, reference.reciprocal_basis_Ainv):
         rod_revision = canonical_revision_sha256(

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
+from dataclasses import dataclass, field
+
 import numpy as np
 import xraydb
 from numpy.typing import ArrayLike, NDArray
@@ -12,6 +15,70 @@ from rasim_next.materials.crystal import CrystalStructure
 
 HC_EV_A = 12398.419843320026
 AVOGADRO_PER_MOL = 6.02214076e23
+
+
+@dataclass(slots=True)
+class OpticalFactorCache:
+    """Explicit Q=0 factor reuse; occupied counts and volume remain candidate data.
+
+    The budget includes retained factor arrays and wavelength key bytes, with a
+    separate entry bound for Python/database metadata. No optical state is cached.
+    """
+
+    maximum_bytes: int = 1024**2
+    maximum_entries: int = 256
+    retained_bytes: int = field(default=0, init=False)
+    hits: int = field(default=0, init=False)
+    misses: int = field(default=0, init=False)
+    _entries: OrderedDict = field(default_factory=OrderedDict, init=False, repr=False)
+
+    def __post_init__(self):
+        if any(
+            type(value) is not int or value < 0
+            for value in (self.maximum_bytes, self.maximum_entries)
+        ):
+            raise ValueError("optical factor cache limits must be nonnegative integers")
+
+    def _forward(self, species, element, charge, wavelength):
+        """Consume material_optics' validated, unique float64 wavelength vector."""
+        database = xraydb.get_xraydb()
+        key = (
+            database,
+            xraydb.__version__,
+            database.get_version(),
+            species,
+            element,
+            charge,
+            wavelength.shape,
+            wavelength.tobytes(),
+        )
+        if key in self._entries:
+            self.hits += 1
+            self._entries.move_to_end(key)
+            return self._entries[key][:2]
+        self.misses += 1
+        factor, mapping = atomic_scattering_factor_e(
+            species=species,
+            element=element,
+            charge=charge,
+            q_magnitude_Ainv=np.zeros(wavelength.size),
+            wavelength_A=wavelength,
+        )
+        size = factor.nbytes + wavelength.nbytes
+        if self.maximum_entries and size <= self.maximum_bytes:
+            while self._entries and (
+                self.retained_bytes + size > self.maximum_bytes
+                or len(self._entries) >= self.maximum_entries
+            ):
+                self.retained_bytes -= self._entries.popitem(last=False)[1][2]
+            factor.setflags(write=False)
+            self._entries[key] = factor, mapping, size
+            self.retained_bytes += size
+        return factor, mapping
+
+    def clear(self):
+        self._entries.clear()
+        self.retained_bytes = 0
 
 
 def _f0_species(element: str, charge: int) -> str:
@@ -88,9 +155,16 @@ def mass_density_g_cm3(crystal: CrystalStructure) -> float:
     return float(density)
 
 
-def material_optics(crystal: CrystalStructure, wavelength_A: ArrayLike) -> MaterialOptics:
+def material_optics(
+    crystal: CrystalStructure,
+    wavelength_A: ArrayLike,
+    *,
+    factor_cache: OpticalFactorCache | None = None,
+) -> MaterialOptics:
     """Derive wavelength-resolved optical constants from the occupied expanded structure."""
 
+    if factor_cache is not None and not isinstance(factor_cache, OpticalFactorCache):
+        raise TypeError("factor_cache must be an OpticalFactorCache")
     wavelength = np.asarray(wavelength_A, dtype=np.float64)
     if wavelength.ndim != 1 or not np.all(np.isfinite(wavelength)) or np.any(wavelength <= 0.0):
         raise ValueError("wavelength_A must be a finite positive one-dimensional array")
@@ -104,13 +178,16 @@ def material_optics(crystal: CrystalStructure, wavelength_A: ArrayLike) -> Mater
             for site in crystal.sites
             if (site.species, site.element, site.charge) == (species, element, charge)
         )
-        factor, mapping = atomic_scattering_factor_e(
-            species=species,
-            element=element,
-            charge=charge,
-            q_magnitude_Ainv=np.zeros(wavelength.size),
-            wavelength_A=wavelength,
-        )
+        if factor_cache is None:
+            factor, mapping = atomic_scattering_factor_e(
+                species=species,
+                element=element,
+                charge=charge,
+                q_magnitude_Ainv=np.zeros(wavelength.size),
+                wavelength_A=wavelength,
+            )
+        else:
+            factor, mapping = factor_cache._forward(species, element, charge, wavelength)
         forward_factor_e += occupied_count * factor
         mappings.append(mapping)
 

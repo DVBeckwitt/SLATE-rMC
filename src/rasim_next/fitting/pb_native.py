@@ -155,7 +155,9 @@ class PbNativeStructureModel:
         )
         object.__setattr__(self, "_labels", (lead[0].source_label, iodine[0].source_label))
 
-    def bind(self, parameters: PbCellSiteParameters) -> NativeFitPhysics:
+    def bind(
+        self, parameters: PbCellSiteParameters, *, optical_factor_cache=None
+    ) -> NativeFitPhysics:
         if not isinstance(parameters, PbCellSiteParameters):
             raise TypeError("parameters must be PbCellSiteParameters")
         initial = self.reference_parameters
@@ -197,7 +199,9 @@ class PbNativeStructureModel:
             ("reference_input", self.reference.input_revision),
             ("parameters", parameters.as_array()),
         )
-        return rebind_native_structure(self.reference, recipe, revision)
+        return rebind_native_structure(
+            self.reference, recipe, revision, optical_factor_cache=optical_factor_cache
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,7 +267,7 @@ class PbJointModel:
             np.concatenate([simplex_shares(p.weights) for p in phases]),
         ]
 
-    def bind(self, values, coherent_repeats):
+    def bind(self, values, coherent_repeats, *, optical_factor_cache=None):
         values = np.asarray(values)
         if (
             values.shape != (len(self.parameter_names),)
@@ -275,7 +279,12 @@ class PbJointModel:
             or coherent_repeats < 1
         ):
             raise ValueError("invalid Pb joint coordinate vector")
-        physics = self.atomic.bind(PbCellSiteParameters.from_array(values[:9]))
+        parameters = PbCellSiteParameters.from_array(values[:9])
+        physics = (
+            self.atomic.bind(parameters, optical_factor_cache=optical_factor_cache)
+            if type(self.atomic) is PbNativeStructureModel
+            else self.atomic.bind(parameters)
+        )
         MosaicParameters(*values[9:12])
         phases = physics.structure.stacking_phases
         count = len(phases)

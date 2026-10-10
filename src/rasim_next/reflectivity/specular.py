@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from operator import index
 
+import numba
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
@@ -337,6 +338,41 @@ def _blend_bounds(
     return (3.0, 6.0), "fallback"
 
 
+@numba.njit(nogil=True, fastmath=False, cache=False)
+def _overlap_below_length(scale, a, b, widths):
+    total = 0.0
+    left = a[0] - scale * b[0]
+    for i in range(len(widths)):
+        right = a[i + 1] - scale * b[i + 1]
+        fraction = 1.0 if left <= 0 and right <= 0 else 0.0
+        if (left < 0) != (right < 0) and left != right:
+            fraction = (-left if left < 0 else -right) / abs(right - left)
+        total += widths[i] * fraction
+        left = right
+    return total
+
+
+@numba.njit(nogil=True, fastmath=False, cache=False)
+def _continuous_overlap_median(a, b, widths):
+    lower, upper = 0.0, 1.0
+    while _overlap_below_length(upper, a, b, widths) < 2.5:
+        upper *= 2.0
+        if not np.isfinite(upper):
+            raise FloatingPointError("overlap median has no finite scale")
+    lower = upper / 2
+    while lower > 0 and _overlap_below_length(lower, a, b, widths) >= 2.5:
+        upper, lower = lower, lower / 2
+    for _ in range(64):
+        middle = (lower + upper) / 2
+        if _overlap_below_length(middle, a, b, widths) < 2.5:
+            lower = middle
+        else:
+            upper = middle
+        if upper - lower <= 8 * np.finfo(np.float64).eps * upper:
+            break
+    return upper
+
+
 def continuous_overlap_scale(q_over_qc, parratt_numerator, phase_strength) -> float:
     """Median of A/B in uniform Q measure on [5 Qc, 10 Qc].
 
@@ -366,34 +402,7 @@ def continuous_overlap_scale(q_over_qc, parratt_numerator, phase_strength) -> fl
     a, b = a / a_scale, b / b_scale
     widths = np.diff(x)
 
-    def below_length(scale):
-        difference = a - scale * b
-        left, right = difference[:-1], difference[1:]
-        fraction = ((left <= 0) & (right <= 0)).astype(float)
-        crossing = (left < 0) != (right < 0)
-        crossing &= left != right
-        fraction[crossing] = np.where(
-            left[crossing] < 0, -left[crossing], -right[crossing]
-        ) / np.abs(right[crossing] - left[crossing])
-        return float(widths @ fraction)
-
-    lower, upper = 0.0, 1.0
-    while below_length(upper) < 2.5:
-        upper *= 2.0
-        if not np.isfinite(upper):
-            raise FloatingPointError("overlap median has no finite scale")
-    lower = upper / 2
-    while lower > 0 and below_length(lower) >= 2.5:
-        upper, lower = lower, lower / 2
-    for _ in range(64):
-        middle = (lower + upper) / 2
-        if below_length(middle) < 2.5:
-            lower = middle
-        else:
-            upper = middle
-        if upper - lower <= 8 * np.finfo(float).eps * upper:
-            break
-    result = upper * (a_scale / b_scale)
+    result = _continuous_overlap_median(a, b, widths) * (a_scale / b_scale)
     if not np.isfinite(result) or result <= 0:
         raise FloatingPointError("overlap median must be finite and positive")
     return float(result)

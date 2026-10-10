@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from math import fsum
 
+import numba
 import numpy as np
 from numba.extending import register_jitable
 from numpy.polynomial.legendre import leggauss
@@ -32,32 +33,50 @@ def _gaussian_exponential(angle_rad, sigma_rad):
     return np.exp(-0.5 * (angle_rad / sigma_rad) ** 2)
 
 
-def _wrapped_gaussian_density(angle_rad: FloatArray, sigma_rad: float) -> FloatArray:
-    if sigma_rad >= 1.0:
-        density = np.ones_like(angle_rad)
+@numba.njit(nogil=True, fastmath=False, cache=False)
+def _wrapped_gaussian_density_flat(angle, sigma):
+    # Stopping belongs to the whole supplied array, including completed cone rows.
+    if sigma >= 1.0:
+        if len(angle) == 0:
+            raise ValueError("zero-size array has no minimum")
+        density = np.ones(len(angle))
         for harmonic in range(1, _DENSITY_MAX_TERMS + 1):
-            amplitude = 2.0 * np.exp(-0.5 * (harmonic * sigma_rad) ** 2)
-            density += amplitude * np.cos(harmonic * angle_rad)
-            next_amplitude = 2.0 * np.exp(-0.5 * ((harmonic + 1) * sigma_rad) ** 2)
-            if next_amplitude <= _DENSITY_RELATIVE_TOLERANCE * np.min(density):
+            amplitude = 2.0 * np.exp(-0.5 * (harmonic * sigma) ** 2)
+            minimum = np.inf
+            for i in range(len(angle)):
+                density[i] += amplitude * np.cos(harmonic * angle[i])
+                minimum = min(minimum, density[i])
+            next_amplitude = 2.0 * np.exp(-0.5 * ((harmonic + 1) * sigma) ** 2)
+            if next_amplitude <= _DENSITY_RELATIVE_TOLERANCE * minimum:
                 return density / (2.0 * np.pi)
         raise RuntimeError("wrapped Gaussian Fourier sum did not converge")
-
-    scaled_density = _gaussian_exponential(angle_rad, sigma_rad)
-    # Every noncentral image is below exp(-800), which is exactly zero in
-    # float64. This is an underflow identity, not a truncated angular tail.
-    if np.max(np.abs(angle_rad), initial=0.0) + 40.0 * sigma_rad < 2.0 * np.pi:
-        return scaled_density / (np.sqrt(2.0 * np.pi) * sigma_rad)
+    density = np.empty(len(angle))
+    maximum_angle = 0.0
+    for i in range(len(angle)):
+        density[i] = _gaussian_exponential(angle[i], sigma)
+        maximum_angle = max(maximum_angle, abs(angle[i]))
+    normalization = np.sqrt(2.0 * np.pi) * sigma
+    if maximum_angle + 40.0 * sigma < 2.0 * np.pi:
+        return density / normalization
     for image in range(1, _DENSITY_MAX_TERMS + 1):
         offset = 2.0 * np.pi * image
-        scaled_density += _gaussian_exponential(angle_rad + offset, sigma_rad)
-        scaled_density += _gaussian_exponential(angle_rad - offset, sigma_rad)
         next_offset = 2.0 * np.pi * (image + 1)
-        next_pair = _gaussian_exponential(angle_rad + next_offset, sigma_rad)
-        next_pair += _gaussian_exponential(angle_rad - next_offset, sigma_rad)
-        if np.all(next_pair <= _DENSITY_RELATIVE_TOLERANCE * scaled_density):
-            return scaled_density / (np.sqrt(2.0 * np.pi) * sigma_rad)
+        converged = True
+        for i in range(len(angle)):
+            density[i] += _gaussian_exponential(angle[i] + offset, sigma)
+            density[i] += _gaussian_exponential(angle[i] - offset, sigma)
+            pair = _gaussian_exponential(angle[i] + next_offset, sigma)
+            pair += _gaussian_exponential(angle[i] - next_offset, sigma)
+            if not pair <= _DENSITY_RELATIVE_TOLERANCE * density[i]:
+                converged = False
+        if converged:
+            return density / normalization
     raise RuntimeError("wrapped Gaussian image sum did not converge")
+
+
+def _wrapped_gaussian_density(angle_rad: FloatArray, sigma_rad: float) -> FloatArray:
+    angle = np.asarray(angle_rad, dtype=np.float64)
+    return _wrapped_gaussian_density_flat(angle.ravel(), sigma_rad).reshape(angle.shape)
 
 
 def _wrapped_lorentzian_density(angle_rad: FloatArray, half_width_rad: float) -> FloatArray:

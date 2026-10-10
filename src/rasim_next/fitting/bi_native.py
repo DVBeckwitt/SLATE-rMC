@@ -170,7 +170,9 @@ class BiNativeStructureModel:
         object.__setattr__(self, "_orbit_index", orbit)
         object.__setattr__(self, "_z_sign", signs)
 
-    def bind(self, parameters: BiCellSiteParameters) -> NativeFitPhysics:
+    def bind(
+        self, parameters: BiCellSiteParameters, *, optical_factor_cache=None
+    ) -> NativeFitPhysics:
         """Build a complete physical candidate, never reuse a stale optical transfer."""
         if not isinstance(parameters, BiCellSiteParameters):
             raise TypeError("parameters must be BiCellSiteParameters")
@@ -233,7 +235,9 @@ class BiNativeStructureModel:
             ("reference_input", reference.input_revision),
             ("parameters", parameters.as_array()),
         )
-        return rebind_native_structure(reference, recipe, revision)
+        return rebind_native_structure(
+            reference, recipe, revision, optical_factor_cache=optical_factor_cache
+        )
 
     def validate_rod_coverage(self, *, a_bounds_A, c_bounds_A) -> dict[str, float | int]:
         """Prove fixed-roster coverage over the complete declared cell box."""

@@ -8,12 +8,15 @@ from typing import Protocol
 import numpy as np
 
 from painted_ewald import MosaicParameters
+from rasim_next.fitting.bi_joint import BiJointModel
 from rasim_next.fitting.native_instrument import (
     NATIVE_INSTRUMENT_PARAMETER_NAMES,
     NativeInstrumentModel,
 )
 from rasim_next.fitting.native_observations import NativeFitObservations
 from rasim_next.fitting.native_structure import native_stitch_records
+from rasim_next.fitting.pb_native import PbJointModel
+from rasim_next.materials.optics import OpticalFactorCache
 from rasim_next.ordered.amplitudes import AtomicQueryCache
 from rasim_next.pipeline.fiber_detector import FiberScatteringCache
 from rasim_next.pipeline.spatial_execution import NativeSpatialExecutor
@@ -77,6 +80,9 @@ class NativeJointEvaluator:
     atomic_query_cache: AtomicQueryCache = field(
         default_factory=AtomicQueryCache, repr=False, compare=False
     )
+    optical_factor_cache: OpticalFactorCache = field(
+        default_factory=OpticalFactorCache, repr=False, compare=False, kw_only=True
+    )
     _strength_tables: OrderedDict = field(default_factory=OrderedDict, init=False, repr=False)
     aggregation_cache_maximum_bytes: int = 128 * 1024**2
     _strength_responses: OrderedDict = field(default_factory=OrderedDict, init=False, repr=False)
@@ -92,6 +98,8 @@ class NativeJointEvaluator:
             raise ValueError("strength cache memory budget must be a nonnegative integer")
         if not isinstance(self.atomic_query_cache, AtomicQueryCache):
             raise TypeError("atomic_query_cache must be an AtomicQueryCache")
+        if not isinstance(self.optical_factor_cache, OpticalFactorCache):
+            raise TypeError("optical_factor_cache must be an OpticalFactorCache")
         if (
             type(self.aggregation_cache_maximum_bytes) is not int
             or self.aggregation_cache_maximum_bytes < 0
@@ -135,9 +143,21 @@ class NativeJointEvaluator:
                 "native candidate requires a finite aligned vector and positive integer N"
             )
         physical = values[:-18] if self.instrument_model is not None else values
-        physics, arguments, mosaic, stack = self.model.bind(physical, coherent_repeats)
+        preparation = (
+            {"optical_factor_cache": self.optical_factor_cache}
+            if type(self.model) in (BiJointModel, PbJointModel)
+            else {}
+        )
+        physics, arguments, mosaic, stack = self.model.bind(
+            physical, coherent_repeats, **preparation
+        )
         if self.instrument_model is not None:
-            physics = self.instrument_model.bind(physics, values[-18:])
+            preparation = (
+                {"optical_factor_cache": self.optical_factor_cache}
+                if type(self.instrument_model) is NativeInstrumentModel
+                else {}
+            )
+            physics = self.instrument_model.bind(physics, values[-18:], **preparation)
         return physics, arguments, mosaic, stack
 
     def predict(self, values, coherent_repeats, *, resolve_mosaic_components=False):
@@ -343,19 +363,22 @@ class NativeJointEvaluator:
             if key not in active:
                 del self._cone_densities[key]
         components = []
+        missing = [key for key in active if key not in self._cone_densities]
+        prepared = response.compile_cone_components(
+            tuple(key[1] for key in missing),
+            quadrature_order=order,
+            maximum_bytes=self.cone_cache_maximum_bytes,
+        )
+        for key, packet in zip(missing, prepared, strict=True):
+            self._cone_densities[key] = packet
+            object.__setattr__(self, "cone_compile_count", self.cone_compile_count + 1)
         for law, weight in zip(laws, (1 - eta, eta), strict=True):
             if weight == 0:
                 components.append(None)
                 continue
             key = revision, law, order
-            packet = self._cone_densities.get(key)
-            if packet is None:
-                packet = response.compile_cone_density(
-                    law, quadrature_order=order, maximum_bytes=self.cone_cache_maximum_bytes
-                )
-                self._cone_densities[key] = packet
-                object.__setattr__(self, "cone_compile_count", self.cone_compile_count + 1)
-            else:
+            packet = self._cone_densities[key]
+            if key not in missing:
                 if packet.response is not response:
                     raise ValueError("cone cache response ownership differs")
                 self._cone_densities.move_to_end(key)
@@ -423,6 +446,7 @@ class NativeJointEvaluator:
         self._strength_responses.clear()
         self._factor_uses.clear()
         self.atomic_query_cache.clear()
+        self.optical_factor_cache.clear()
 
     def inactive_parameters(self, values, coherent_repeats):
         """Exact physical inactivity at mixture boundaries; coordinates stay free.

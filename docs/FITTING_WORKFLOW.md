@@ -1010,3 +1010,66 @@ callers and final runtime sources (SHA256
 `3228cd8663c94b36b8e01eb0903c3519100d8b8a8645c6ba982695a539494916`).
 Temporary callers and generated build output
 were removed; no assessment harness was added to the repository.
+
+### October 9-10 additional native preparation kernels
+
+The shared implementation now compiles continuous-Q overlap bisection, fuses
+Ewald coordinate/vector/measure preparation, compiles the broad wrapped Gaussian
+path, shares cone geometry across missing pure components, prepares independent
+cone blocks concurrently, and reuses unchanged optical forward factors. Sparse
+region preparation uses a unique-rectangle spatial index and bounded contiguous
+CSR buffers. These are shared numerical owners, not a Bi2Se3-specific fit path.
+See [the refinement manual](NATIVE_REFINEMENT.md#shared-cone-acceleration-and-memory)
+for preparation ownership, budgets and direct APIs.
+
+The reference for this change is `9f185f4999f331b88c3037ca762ba3acb58a73cf`.
+On the saved nominal combined-region Bi2Se3 response, three paired preparations of
+both cone packets took median 4.8176 seconds before and 1.4647 seconds after.
+Three fresh seven-candidate batches, with response geometry already prepared,
+took 12.5313 versus 5.6338 seconds. The stencil included structure, both widths,
+mixture, surface and roughness coordinates. These are preparation/batch timings,
+not complete-fit or first-process-start timings.
+
+Saved center and structural-probe raw counts passed the unchanged per-element
+2e-12 relative plus 32 float64-tiny allowance. Structural-contrast relative L2
+disagreement was 1.54e-13, below the frozen 2e-8 gate. Cone comparisons covered
+pure/mixed laws, wide/narrow transitions, 2048-event boundaries, degenerate cones
+and independent converged angular integrals. Optical constants and provenance
+were identical for Bi2Se3, Bi2Te3 and PbI2 2H/6H with changed occupancy, volume
+and wavelengths; cache caps, clearing and the existing binder signatures passed.
+
+Focused median component timings were 0.9192 to 0.1573 ms for continuous overlap,
+2.7472 to 0.6696 ms for 32768 Ewald events, and 4.4713 to 0.6520 ms for warm material
+optics. Broad cone arithmetic alone gave modest gains (59.11 to 50.60 ms at sigma
+0.25 and 43.25 to 39.90 ms at sigma 1.2, in radians); the larger cone-preparation
+gain comes from sharing and block concurrency. No tolerance, background treatment,
+physical support or fit-qualification state changed. No optimizer was run.
+
+All 160 sparse blocks matched the parent CSR row pointers, observation indices
+and values bit for bit. Final projection took 139.5242 seconds; the 161.6476-second
+parent full projection was a separate earlier run. Seven warmed paired selected
+blocks totaled 7.3712 versus 6.2309 seconds. Every block admitted four workers within
+the 64 MiB concurrent workspace cap. The retained spatial index increased from
+32537760 to 35048872 bytes on this response; eliminating duplicate worker sort
+arrays reduced scratch sufficiently to recover concurrency. Initial blocked-index
+and larger-scratch hierarchical variants were slower and were replaced.
+
+Three hundred enumeration cases covered clipped, empty and tangent bounds, tied
+centers and positive/negative slopes. Wide, narrow, fragmented and empty synthetic
+projections preserved exact CSR output. The small fragmented case was about eight
+percent slower, so this is not a universal speedup claim. Runtime improvements
+must be assessed with the actual support and memory budget.
+
+Formatting, source lint, all 13 changed-module imports, refinement/render CLI help,
+offline wheel/source-distribution builds and diff whitespace checks passed. An
+initial build check selected an interpreter without the build backend; the repaired
+check used the declared cached isolated backend. These software checks do not
+establish scientific fit adequacy.
+
+The single external `native_preparation_kernels.ra_diag.npz` retains all 16 measured
+records, failed callers with repairs, exact temporary callers and final runtime
+sources (SHA256
+`81aa6f9a8d6e5a5c15f01348cf18263bf93bbf2132a25d52cbef7c433b256ced`).
+Temporary scripts, response pickle and generated builds were removed; no assessment
+harness was added to the repository. No new fitted parameters or convergence claim
+are produced by this implementation work.
