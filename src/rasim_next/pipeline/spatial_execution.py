@@ -39,6 +39,28 @@ class NativeSpatialExecutor:
     last_decision: SpatialExecutionDecision | None = field(default=None, init=False)
     counts: dict[str, int] = field(default_factory=dict, init=False)
     _owner: tuple[int, int] | None = field(default=None, init=False, repr=False)
+    region_workers: int = 0
+    region_workspace_bytes: int = 64 * 1024**2
+
+    def __post_init__(self):
+        if type(self.region_workers) is not int or self.region_workers < 0:
+            raise ValueError(
+                "region_workers must be a nonnegative integer (zero selects automatically)"
+            )
+        if type(self.region_workspace_bytes) is not int or self.region_workspace_bytes < 1:
+            raise ValueError("region workspace budget must be a positive integer")
+
+    def region_worker_count(self, event_count):
+        """Bound CPU concurrency by the caller's Numba thread allowance."""
+        import numba
+
+        owner = (getpid(), get_ident())
+        if self._owner is not None and self._owner != owner:
+            raise RuntimeError("native spatial executor must stay in its owning process/thread")
+        self._owner = owner
+        available = numba.get_num_threads()
+        workers = min(self.region_workers or 4, available, max(1, event_count // 1024))
+        return workers
 
     def summary(self):
         return {

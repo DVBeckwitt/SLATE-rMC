@@ -9,7 +9,7 @@ import numpy as np
 
 from rasim_next.core.contracts import LayerAmplitudeResult, RodQueryBatch
 from rasim_next.materials.crystal import CrystalSite, CrystalStructure
-from rasim_next.ordered.amplitudes import unit_cell_amplitude
+from rasim_next.ordered.amplitudes import AtomicQueryCache, unit_cell_amplitude
 
 
 @dataclass(frozen=True, slots=True)
@@ -688,6 +688,7 @@ def bi2x3_quintuple_layer_amplitudes(
     *,
     structure_parameters: Bi2X3QuintupleLayerParameters | None = None,
     site_displacement_profile: SiteDisplacementProfile | None = None,
+    query_cache: AtomicQueryCache | None = None,
 ) -> LayerAmplitudeResult:
     """Return central-chalcogen-centered quintuple-layer F+ and F- in electron units.
 
@@ -743,6 +744,7 @@ def bi2x3_quintuple_layer_amplitudes(
         query.wavelength_A,
         shared_displacement_tensor_A2=displacement_tensor,
         site_displacement_tensors_A2=site_displacement_tensors,
+        query_cache=query_cache,
     ).amplitude_e
     f_minus = unit_cell_amplitude(
         _motif_crystal(crystal, minus_atoms, f"{crystal.phase_id}:ql-minus"),
@@ -750,6 +752,7 @@ def bi2x3_quintuple_layer_amplitudes(
         query.wavelength_A,
         shared_displacement_tensor_A2=displacement_tensor,
         site_displacement_tensors_A2=site_displacement_tensors,
+        query_cache=query_cache,
     ).amplitude_e
     return LayerAmplitudeResult(
         event_id=query.event_id,

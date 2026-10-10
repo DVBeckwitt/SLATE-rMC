@@ -22,12 +22,16 @@ from rasim_next.geometry.instrument import CompiledInstrument
 from rasim_next.geometry.transport import IncidentTransportResult
 from rasim_next.measurement.continuous_regions import NativePixelRegionProjection
 from rasim_next.optics.attenuation import uniform_depth_attenuation
+from rasim_next.ordered.amplitudes import AtomicQueryCache
 from rasim_next.pipeline._continuous_detector_kernel import (
     _empirical_parratt_strength_A2,
     local_m0_phase_q_Ainv,
 )
 from rasim_next.pipeline.bragg_space import (
+    Bi2X3FiniteStackStrength,
+    CifFiniteStackStrength,
     IncoherentStructureMixture,
+    Pbi2FiniteSurfaceStrength,
     RevisionedStructureStrengthModel,
 )
 from rasim_next.pipeline.continuous_detector import SampleQIntensityEnvelope
@@ -369,6 +373,9 @@ class NativeFixedResponse:
         projection: NativePixelRegionProjection,
         *,
         cone_density: NativeConeDensity | None = None,
+        cone_components: tuple[NativeConeDensity | None, NativeConeDensity | None] | None = None,
+        strength_tables: NativeStrengthTables | None = None,
+        query_cache: AtomicQueryCache | None = None,
     ) -> FloatArray:
         if self.revision != detector.native_response_revision(projection):
             raise ValueError("fixed response does not match current geometry, optics or projection")
@@ -379,12 +386,17 @@ class NativeFixedResponse:
             or cone_density.quadrature_order != detector.integration_rule.cone_quadrature_order
         ):
             raise ValueError("cone density does not match response, mosaic or quadrature")
-        tables = [
-            detector._strength_table(
-                grid, detector.strength_model, detector.instrument.film_thickness_A
-            )
-            for grid in self.grids
-        ]
+        self._validate_cone_components(detector, cone_components)
+        if cone_density is not None and cone_components is not None:
+            raise ValueError("supply mixed density or separate components, not both")
+        if strength_tables is None:
+            strength_tables = self.compile_strength_tables(detector, query_cache=query_cache)
+        if (
+            strength_tables.response is not self
+            or strength_tables.revision != self.strength_revision(detector)
+        ):
+            raise ValueError("strength tables do not match current response, structure or stitch")
+        tables = strength_tables.values
         density = (
             SphericalMosaicDensity(detector.mosaic)
             if cone_density is None
@@ -402,11 +414,403 @@ class NativeFixedResponse:
                 * detector.polarization_weight
                 * detector.incident.states.source_weight[nodes.source_state_index],
                 detector.integration_rule.cone_quadrature_order,
-                None if cone_density is None else cone_density.values[block_index],
+                self._cone_values(detector, block_index, cone_density, cone_components),
                 probability=probability,
             )
         if np.any(~np.isfinite(result)) or np.any(result < 0):
             raise FloatingPointError("invalid complete fixed native response")
+        return result
+
+    def strength_revision(self, detector):
+        stack = detector.specular_stitch_stack
+        return canonical_revision_sha256(
+            ("structure", detector.strength_model.structure_model_revision),
+            ("basis", detector.reciprocal_basis_Ainv),
+            ("wavelength", detector.material.wavelength_A),
+            ("optics", detector.material.n_complex),
+            ("stitch_grid_size", detector.integration_rule.stitch_grid_size),
+            ("thickness", detector.instrument.film_thickness_A),
+            ("stack", "none" if stack is None else repr(stack)),
+        )
+
+    def factor_revision(self, detector):
+        """All non-strength factors; geometry/probability belong to this response."""
+        return canonical_revision_sha256(
+            ("mosaic", json.dumps(asdict(detector.mosaic), sort_keys=True)),
+            ("cone_order", detector.integration_rule.cone_quadrature_order),
+            ("thickness", detector.instrument.film_thickness_A),
+            (
+                "envelope",
+                np.array(
+                    [
+                        detector.intensity_envelope.u_radial_A2,
+                        detector.intensity_envelope.u_normal_A2,
+                    ]
+                ),
+            ),
+            ("source_weights", detector.incident.states.source_weight),
+            ("weights", np.array([detector.phase_population_weight, detector.polarization_weight])),
+        )
+
+    def compile_strength_response(self, detector, projection, *, cone_components, maximum_bytes):
+        """Aggregate repeated axial events, with explicit memory/range admission."""
+        if type(maximum_bytes) is not int or maximum_bytes < 0:
+            raise ValueError("strength response budget must be a nonnegative integer")
+        if self.revision != detector.native_response_revision(projection):
+            raise ValueError("strength response geometry differs")
+        self._validate_cone_components(detector, cone_components)
+        blocks, reasons, retained = [], [], 0
+        density = SphericalMosaicDensity(detector.mosaic)
+        for block_index in range(len(self.blocks)):
+            block, reason, size = self._compile_strength_block(
+                detector, block_index, density, cone_components, maximum_bytes - retained
+            )
+            blocks.append(block)
+            reasons.append(reason)
+            retained += size
+        return NativeStrengthResponse(
+            self, self.factor_revision(detector), tuple(blocks), tuple(reasons), retained
+        )
+
+    def _compile_strength_block(
+        self, detector, block_index, density, cone_components, maximum_bytes
+    ):
+        # Scratch dies with this call before the next block receives its budget.
+        nodes, probability = self.blocks[block_index]
+        count = len(self.grids[nodes.grid_index].positive_axial_Ainv)
+        if 128 * len(nodes.axial_index) + 16 * count + 24 * self.observation_count > maximum_bytes:
+            return None, "memory_limit", 0
+        cone = self._cone_values(detector, block_index, None, cone_components)
+        if cone is None:
+            return None, "unprepared_cone", 0
+        basis = np.zeros((2, count))
+        weights = []
+        for sign in range(2):
+            basis[:] = 0
+            basis[sign] = 1
+            weights.append(
+                _event_mass(
+                    nodes,
+                    basis,
+                    density,
+                    detector.instrument.film_thickness_A,
+                    detector.intensity_envelope,
+                    detector.phase_population_weight
+                    * detector.polarization_weight
+                    * detector.incident.states.source_weight[nodes.source_state_index],
+                    detector.integration_rule.cone_quadrature_order,
+                    cone,
+                )
+            )
+        weights = np.asarray(weights)
+        axial, inverse = np.unique(nodes.axial_index, return_inverse=True)
+        order = np.argsort(inverse, kind="stable")
+        event_ptr = np.searchsorted(inverse[order], np.arange(len(axial) + 1))
+        ptr, _, _, minimum, maximum, unsafe = _aggregate_axial_events(
+            weights,
+            order,
+            event_ptr,
+            probability.data,
+            probability.indices,
+            probability.indptr,
+            self.observation_count,
+            None,
+        )
+        # Aggregation must reduce sparse work and fit retained + construction storage.
+        size = int(ptr[-1]) * 16 + ptr.nbytes + axial.nbytes
+        scratch = (
+            128 * len(nodes.axial_index) + 16 * count + 24 * self.observation_count + ptr.nbytes
+        )
+        if unsafe or np.any(
+            (weights == 0) & (cone > 0) & (nodes.integrated_coefficient[None, :] > 0)
+        ):
+            return None, "dynamic_range", 0
+        if int(ptr[-1]) >= probability.nnz:
+            return None, "no_sparse_reduction", 0
+        if 2 * size + scratch > maximum_bytes:
+            return None, "memory_limit", 0
+        ptr, indices, data, _, _, _ = _aggregate_axial_events(
+            weights,
+            order,
+            event_ptr,
+            probability.data,
+            probability.indices,
+            probability.indptr,
+            self.observation_count,
+            int(ptr[-1]),
+        )
+        positives = cone[cone > 0]
+        if len(positives):
+            minimum = min(minimum, float(positives.min()))
+            maximum = max(maximum, float(positives.max()))
+        positives = weights[weights > 0]
+        if len(positives):
+            minimum = min(minimum, float(positives.min()))
+            maximum = max(maximum, float(positives.max()))
+        matrix = csr_matrix(
+            (data, indices, ptr), shape=(2 * len(axial), self.observation_count), copy=False
+        )
+        if np.any(~np.isfinite(data)):
+            return None, "dynamic_range", 0
+        # Keep both multiplication orders and all positive sums away from
+        # float64 overflow/underflow. Other candidate ranges use direct events.
+        lower = -1000.0 - np.log2(minimum) if np.isfinite(minimum) else -np.inf
+        upper = (
+            1000.0
+            - np.log2(max(maximum, np.finfo(float).tiny))
+            - np.log2(max(2, 2 * len(nodes.axial_index)))
+        )
+        for array in (axial, matrix.data, matrix.indices, matrix.indptr):
+            array.setflags(write=False)
+        size = axial.nbytes + sum(v.nbytes for v in (matrix.data, matrix.indices, matrix.indptr))
+        return (axial, matrix, lower, upper), "aggregated", size
+
+    def compile_strength_tables(self, detector, *, query_cache=None):
+        return NativeStrengthTables(
+            self,
+            self.strength_revision(detector),
+            tuple(
+                detector._strength_table(
+                    grid,
+                    detector.strength_model,
+                    detector.instrument.film_thickness_A,
+                    query_cache=query_cache,
+                )
+                for grid in self.grids
+            ),
+        )
+
+    def _validate_cone_components(self, detector, components):
+        if components is None:
+            return
+        if len(components) != 2:
+            raise ValueError("two cone components are required")
+        mosaic = detector.mosaic
+        for packet, weight, law in zip(
+            components,
+            (1 - mosaic.lorentzian_probability, mosaic.lorentzian_probability),
+            (
+                MosaicParameters(mosaic.gaussian_sigma_rad, 0.0, 0.0),
+                MosaicParameters(0.0, mosaic.lorentzian_half_width_rad, 1.0),
+            ),
+            strict=True,
+        ):
+            if weight == 0 and packet is None:
+                continue
+            if (
+                not isinstance(packet, NativeConeDensity)
+                or packet.response is not self
+                or packet.density.parameters != law
+                or packet.quadrature_order != detector.integration_rule.cone_quadrature_order
+            ):
+                raise ValueError("cone component does not match response, width or quadrature")
+
+    def _cone_values(self, detector, index, density, components):
+        if components is None:
+            return None if density is None else density.values[index]
+        eta = detector.mosaic.lorentzian_probability
+        if eta == 0:
+            return components[0].values[index]
+        if eta == 1:
+            return components[1].values[index]
+        return (1 - eta) * components[0].values[index] + eta * components[1].values[index]
+
+    def evaluate_many(self, detectors, projection, *, cone_components, strength_tables):
+        """Bounded candidate-axis event masses with one ordered CSR traversal."""
+        if (
+            not 1 <= len(detectors) <= 8
+            or len(cone_components) != len(detectors)
+            or len(strength_tables) != len(detectors)
+        ):
+            raise ValueError("a native response batch requires one to eight aligned candidates")
+        for detector, components, tables in zip(
+            detectors, cone_components, strength_tables, strict=True
+        ):
+            if self.revision != detector.native_response_revision(projection):
+                raise ValueError("batched response geometry differs")
+            self._validate_cone_components(detector, components)
+            if tables.response is not self or tables.revision != self.strength_revision(detector):
+                raise ValueError("batched strength tables differ")
+        result = np.zeros((len(detectors), self.observation_count))
+        densities = [SphericalMosaicDensity(detector.mosaic) for detector in detectors]
+        for block_index, (nodes, probability) in enumerate(self.blocks):
+            masses = np.empty((len(detectors), len(nodes.axial_index)))
+            for i, (detector, components, tables) in enumerate(
+                zip(detectors, cone_components, strength_tables, strict=True)
+            ):
+                masses[i] = _event_mass(
+                    nodes,
+                    tables.values[nodes.grid_index],
+                    densities[i],
+                    detector.instrument.film_thickness_A,
+                    detector.intensity_envelope,
+                    detector.phase_population_weight
+                    * detector.polarization_weight
+                    * detector.incident.states.source_weight[nodes.source_state_index],
+                    detector.integration_rule.cone_quadrature_order,
+                    self._cone_values(detector, block_index, None, components),
+                )
+            block = np.zeros_like(result)
+            _contract_candidate_masses(
+                masses, probability.data, probability.indices, probability.indptr, block
+            )
+            result += block
+        if np.any(~np.isfinite(result)) or np.any(result < 0):
+            raise FloatingPointError("invalid batched native response")
+        return result
+
+
+@numba.njit(nogil=True, fastmath=False, cache=False)
+def _contract_candidate_masses(masses, data, indices, indptr, result):
+    for event in range(masses.shape[1]):
+        for j in range(indptr[event], indptr[event + 1]):
+            observation, probability = indices[j], data[j]
+            for candidate in range(len(masses)):
+                result[candidate, observation] += probability * masses[candidate, event]
+
+
+@dataclass(frozen=True, slots=True)
+class NativeStrengthTables:
+    """Exact signed strength/stitch tables for one response and physical revision."""
+
+    response: NativeFixedResponse
+    revision: str
+    values: tuple[FloatArray, ...]
+    retained_bytes: int = field(init=False)
+
+    def __post_init__(self):
+        if len(self.values) != len(self.response.grids):
+            raise ValueError("strength tables must align with response grids")
+        for value in self.values:
+            reject_complex(value, "signed strength table")
+        values = tuple(np.array(value, dtype=np.float64, copy=True) for value in self.values)
+        for value, grid in zip(values, self.response.grids, strict=True):
+            if (
+                value.shape != (2, len(grid.positive_axial_Ainv))
+                or np.any(~np.isfinite(value))
+                or np.any(value < 0)
+            ):
+                raise ValueError("signed strength tables must be finite and nonnegative")
+            value.setflags(write=False)
+        object.__setattr__(self, "values", values)
+        object.__setattr__(self, "retained_bytes", sum(value.nbytes for value in values))
+
+
+@numba.njit(nogil=True, fastmath=False, cache=False)
+def _aggregate_axial_events(weights, event_order, event_ptr, data, indices, indptr, nobs, count):
+    """Two passes bound sparse allocation; each row retains original event order."""
+    rows = 2 * (len(event_ptr) - 1)
+    out_ptr = np.zeros(rows + 1, np.int64)
+    out_index = np.empty(0 if count is None else count, np.int64)
+    out_data = np.empty(0 if count is None else count)
+    seen = np.full(nobs, -1, np.int64)
+    touched = np.empty(nobs, np.int64)
+    sums = np.zeros(nobs)
+    cursor, minimum, maximum, unsafe = 0, np.inf, 0.0, False
+    for sign in range(2):
+        for axial in range(len(event_ptr) - 1):
+            row = sign * (len(event_ptr) - 1) + axial
+            used = 0
+            for slot in range(event_ptr[axial], event_ptr[axial + 1]):
+                event = event_order[slot]
+                coefficient = weights[sign, event]
+                for j in range(indptr[event], indptr[event + 1]):
+                    value = coefficient * data[j]
+                    if (
+                        not np.isfinite(value)
+                        or (0 < value < 2.0**-1000)
+                        or (value == 0 and coefficient > 0 and data[j] > 0)
+                    ):
+                        unsafe = True
+                    if value <= 0:
+                        continue
+                    minimum, maximum = min(minimum, value), max(maximum, value)
+                    observation = indices[j]
+                    if seen[observation] != row:
+                        seen[observation] = row
+                        touched[used] = observation
+                        used += 1
+                        sums[observation] = 0.0
+                    sums[observation] += value
+            if count is not None:
+                for k in range(used):
+                    observation = touched[k]
+                    out_index[cursor + k] = observation
+                    out_data[cursor + k] = sums[observation]
+            cursor += used
+            out_ptr[row + 1] = cursor
+    return out_ptr, out_index, out_data, minimum, maximum, unsafe
+
+
+@dataclass(frozen=True, slots=True)
+class NativeStrengthResponse:
+    """Bounded axial aggregation; declined blocks keep canonical event arithmetic."""
+
+    response: NativeFixedResponse
+    factor_revision: str
+    blocks: tuple
+    admission: tuple[str, ...]
+    retained_bytes: int
+
+    def admission_for(self, tables: NativeStrengthTables) -> tuple[str, ...]:
+        """Explain each candidate block's aggregated or canonical arithmetic."""
+        if tables.response is not self.response:
+            raise ValueError("strength admission requires this exact response")
+        reasons = list(self.admission)
+        for index, ((nodes, _), aggregate) in enumerate(
+            zip(self.response.blocks, self.blocks, strict=True)
+        ):
+            if aggregate is None:
+                continue
+            axial, _, lower, upper = aggregate
+            selected = tables.values[nodes.grid_index][:, axial]
+            positive = selected[selected > 0]
+            if len(positive) and (
+                np.log2(positive.min()) < lower or np.log2(positive.max()) > upper
+            ):
+                reasons[index] = "strength_dynamic_range"
+        return tuple(reasons)
+
+    def evaluate_many(self, detectors, projection, *, cone_components, strength_tables):
+        if not 1 <= len(detectors) <= 8 or len(strength_tables) != len(detectors):
+            raise ValueError("strength response batch must contain one to eight aligned candidates")
+        for detector, tables in zip(detectors, strength_tables, strict=True):
+            if (
+                self.response.revision != detector.native_response_revision(projection)
+                or self.factor_revision != self.response.factor_revision(detector)
+                or tables.response is not self.response
+                or tables.revision != self.response.strength_revision(detector)
+            ):
+                raise ValueError("aggregated response dependencies differ")
+            self.response._validate_cone_components(detector, cone_components)
+        result = np.zeros((len(detectors), self.response.observation_count))
+        densities = [SphericalMosaicDensity(detector.mosaic) for detector in detectors]
+        admissions = [self.admission_for(tables) for tables in strength_tables]
+        for index, ((nodes, probability), aggregate) in enumerate(
+            zip(self.response.blocks, self.blocks, strict=True)
+        ):
+            for i, (detector, tables) in enumerate(zip(detectors, strength_tables, strict=True)):
+                strength = tables.values[nodes.grid_index]
+                if admissions[i][index] == "aggregated":
+                    axial, matrix, _, _ = aggregate
+                    selected = strength[:, axial].reshape(-1)
+                    result[i] += matrix.T @ selected
+                    continue
+                result[i] += _event_mass(
+                    nodes,
+                    strength,
+                    densities[i],
+                    detector.instrument.film_thickness_A,
+                    detector.intensity_envelope,
+                    detector.phase_population_weight
+                    * detector.polarization_weight
+                    * detector.incident.states.source_weight[nodes.source_state_index],
+                    detector.integration_rule.cone_quadrature_order,
+                    self.response._cone_values(detector, index, None, cone_components),
+                    probability=probability,
+                )
+        if np.any(~np.isfinite(result)) or np.any(result < 0):
+            raise FloatingPointError("invalid aggregated native response")
         return result
 
 
@@ -781,6 +1185,7 @@ class ConditionalStructureDetector:
                 batch.transfer.spatial,
                 quadrature_order=self.spatial_quadrature_order,
                 gaussian_tail_radius=self.gaussian_tail_radius,
+                executor=self.spatial_executor,
             )
             retained = np.flatnonzero(np.diff(probability.indptr))
             # Removing empty rows changes only row pointers, not nonzero order.
@@ -951,7 +1356,12 @@ class ConditionalStructureDetector:
         return FiberStrengthGrid(batch.rods, wavelength, axial, external)
 
     def _strength_table(
-        self, grid: FiberStrengthGrid, model: RevisionedStructureStrengthModel, thickness: float
+        self,
+        grid: FiberStrengthGrid,
+        model: RevisionedStructureStrengthModel,
+        thickness: float,
+        *,
+        query_cache: AtomicQueryCache | None = None,
     ) -> FloatArray:
         basis = self.reciprocal_basis_Ainv
         b3 = np.linalg.norm(basis[:, 2])
@@ -967,11 +1377,18 @@ class ConditionalStructureDetector:
         result = np.zeros((2, len(grid.positive_axial_Ainv)))
         k0 = 2 * np.pi / grid.wavelength_A
         for component, probability in zip(models, probabilities, strict=True):
+            preparation = (
+                {"query_cache": query_cache}
+                if type(component)
+                in (Bi2X3FiniteStackStrength, CifFiniteStackStrength, Pbi2FiniteSurfaceStrength)
+                else {}
+            )
             value = component.evaluate_hkl(
                 h=np.array([r.h for r in grid.rods])[:, None, None],
                 k=np.array([r.k for r in grid.rods])[:, None, None],
                 L=ell,
                 k_norm_Ainv=k0,
+                **preparation,
             )
             reject_complex(value, "structure strength")
             value = np.asarray(value, dtype=np.float64)
@@ -983,8 +1400,8 @@ class ConditionalStructureDetector:
                 ]
                 stitch = compile_parratt_stitch(
                     self.specular_stitch_stack,
-                    lambda L, component=component: component.evaluate_hkl(
-                        h=0, k=0, L=L, k_norm_Ainv=k0
+                    lambda L, component=component, preparation=preparation: component.evaluate_hkl(
+                        h=0, k=0, L=L, k_norm_Ainv=k0, **preparation
                     ),
                     wavelength_A=grid.wavelength_A,
                     film_refractive_index=film,

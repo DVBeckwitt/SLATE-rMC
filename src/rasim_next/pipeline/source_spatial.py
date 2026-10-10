@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import math
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import numba
@@ -70,12 +71,18 @@ def _rectangle_probability(
     # Repeated coincident edges have zero width and contribute no integral.
     total = 0.0
     left = lo
+    grid_j = 1
+    grid_count = math.ceil((hi - lo) / 0.5)
     while left < hi:
         right = hi
-        for j in range(1, math.ceil((hi - lo) / 0.5)):
-            edge = lo + j * 0.5
-            if left < edge < right:
+        while grid_j < grid_count:
+            edge = lo + grid_j * 0.5
+            if edge <= left:
+                grid_j += 1
+                continue
+            if edge < right:
                 right = edge
+            break
         transition_width = conditional_y / abs(slope)
         for yedge in (ylow, yhigh):
             center = (yedge - my) / slope
@@ -435,6 +442,7 @@ def _project_gaussian_regions(
     owner,
     run_weight,
     corner_index,
+    occupied_columns,
     nobs,
     nodes,
     weights,
@@ -470,7 +478,10 @@ def _project_gaussian_regions(
         coefficients_ready = False
         clow = max(0, math.ceil(mx - radius * sx - 0.5))
         chigh = min(len(ptr) - 2, math.floor(mx + radius * sx + 0.5))
-        for c in range(clow, chigh + 1):
+        first = np.searchsorted(occupied_columns, clow)
+        stop_column = np.searchsorted(occupied_columns, chigh, side="right")
+        for column_slot in range(first, stop_column):
+            c = occupied_columns[column_slot]
             ym = my + beta * (c - mx)
             yr = 0.5 * abs(beta) + radius * conditional_y
             a, b = ptr[c], ptr[c + 1]
@@ -555,6 +566,7 @@ class NativeSpatialRegionProjection:
                 np.empty(0, dtype=np.int64),
                 np.empty(0),
                 np.empty((0, 8), dtype=np.int64),
+                np.empty(0, dtype=np.int64),
             )
             for a in runs:
                 a.setflags(write=False)
@@ -645,13 +657,19 @@ class NativeSpatialRegionProjection:
             owner,
             weight,
             corner_index,
+            np.flatnonzero(np.diff(ptr)),
         )
         for a in runs:
             a.setflags(write=False)
         object.__setattr__(self, "_runs", runs)
 
     def probabilities(
-        self, kernels: DetectorSpatialKernels, *, quadrature_order: int, gaussian_tail_radius: float
+        self,
+        kernels: DetectorSpatialKernels,
+        *,
+        quadrature_order: int,
+        gaussian_tail_radius: float,
+        executor: NativeSpatialExecutor | None = None,
     ) -> csr_matrix:
         """Return [kernel,region] probability; Gaussian approximation bound ≤6Φ(-radius).
 
@@ -663,9 +681,7 @@ class NativeSpatialRegionProjection:
         """
         nodes, weights = _integration_rule(quadrature_order, gaussian_tail_radius)
         angle_nodes, angle_weights = nodes, weights
-        ptr, owner, mass = _project_gaussian_regions(
-            kernels.mean_px,
-            kernels.factor_px,
+        arguments = (
             *self._runs,
             self.projection.observation_count,
             nodes,
@@ -674,6 +690,62 @@ class NativeSpatialRegionProjection:
             angle_weights,
             float(gaussian_tail_radius),
         )
+        workers = 1 if executor is None else executor.region_worker_count(len(kernels.mean_px))
+        # Each task owns all stamps and corner scratch. Bound concurrent worst-case
+        # output/scratch; the final CSR and its assembly are response storage.
+        scratch = 24 * self.projection.observation_count + 8 * len(self._runs[5])
+        scratch += 16 * (int(self._runs[10].max()) + 1 if self._runs[10].size else 0)
+        # Native lists can retain up to 25% spare capacity while arrays are copied.
+        # Use 48 bytes/nonzero plus scalar headers, and reserve angle work separately.
+        row_bytes = 48 * self.projection.observation_count + 256
+        scratch += 4096 + 192 * len(angle_nodes) * 64
+        chunk_rows = (
+            0
+            if executor is None
+            else min(
+                4096, (executor.region_workspace_bytes // workers - scratch) // max(1, row_bytes)
+            )
+        )
+        if workers == 1 or chunk_rows < 32:
+            if executor is not None:
+                executor._record(
+                    "cpu", "region_workers_1" if workers == 1 else "region_workspace_limit"
+                )
+            ptr, owner, mass = _project_gaussian_regions(
+                kernels.mean_px, kernels.factor_px, *arguments
+            )
+        else:
+            executor._record("cpu", f"region_workers_{workers}")
+            # Finish compilation before concurrent calls, without duplicating any event.
+            first = _project_gaussian_regions(
+                kernels.mean_px[:1], kernels.factor_px[:1], *arguments
+            )
+            parts = [first]
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                for start in range(1, len(kernels.mean_px), workers * chunk_rows):
+                    futures = [
+                        pool.submit(
+                            _project_gaussian_regions,
+                            kernels.mean_px[a : a + chunk_rows],
+                            kernels.factor_px[a : a + chunk_rows],
+                            *arguments,
+                        )
+                        for a in range(
+                            start,
+                            min(len(kernels.mean_px), start + workers * chunk_rows),
+                            chunk_rows,
+                        )
+                    ]
+                    parts.extend(future.result() for future in futures)
+            offsets = np.r_[0, np.cumsum([len(p[1]) for p in parts])]
+            ptr = np.r_[
+                np.concatenate(
+                    [p[0][:-1] + offset for p, offset in zip(parts, offsets[:-1], strict=True)]
+                ),
+                offsets[-1],
+            ]
+            owner = np.concatenate([p[1] for p in parts])
+            mass = np.concatenate([p[2] for p in parts])
         if np.any(~np.isfinite(mass)) or np.any(mass < 0):
             raise FloatingPointError("invalid integrated spatial probability")
         return csr_matrix(

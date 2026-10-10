@@ -14,6 +14,7 @@ from rasim_next.fitting.native_instrument import (
 )
 from rasim_next.fitting.native_observations import NativeFitObservations
 from rasim_next.fitting.native_structure import native_stitch_records
+from rasim_next.ordered.amplitudes import AtomicQueryCache
 from rasim_next.pipeline.fiber_detector import FiberScatteringCache
 from rasim_next.pipeline.spatial_execution import NativeSpatialExecutor
 
@@ -41,10 +42,11 @@ class NativeJointEvaluator:
     Adaptive rules always prepare candidate-dependent responses. The explicit
     fixed importance rule reuses geometry and region probabilities while
     contracting current signed strength, mosaic, attenuation and source masses.
-    Candidate mosaic densities reuse only for the same response, full mosaic
-    and cone order. One packet per response is retained under the explicit total
-    ``cone_cache_maximum_bytes`` cap; zero disables retention. Oversized packets
-    use the same direct contraction without retaining density arrays.
+    Pure Gaussian/Lorentzian packets reuse only the exact response, component
+    width and cone order, under ``cone_cache_maximum_bytes``. Mixtures combine
+    per block without retaining a third packet. Zero disables retention; an
+    oversized active pair uses the canonical direct calculation. Strength tables,
+    atomic queries and admitted axial aggregates have separate explicit budgets.
     Exact completed candidate predictions reuse
     only within this immutable evaluator and observation projection.
     ``spatial_execution`` defaults to per-batch automatic CPU/CUDA deposition;
@@ -71,10 +73,30 @@ class NativeJointEvaluator:
     _cone_densities: OrderedDict = field(default_factory=OrderedDict, init=False, repr=False)
     scattering_cache: FiberScatteringCache = field(default_factory=FiberScatteringCache, repr=False)
     cone_cache_maximum_bytes: int = 256 * 1024**2
+    strength_cache_maximum_bytes: int = 128 * 1024**2
+    atomic_query_cache: AtomicQueryCache = field(
+        default_factory=AtomicQueryCache, repr=False, compare=False
+    )
+    _strength_tables: OrderedDict = field(default_factory=OrderedDict, init=False, repr=False)
+    aggregation_cache_maximum_bytes: int = 128 * 1024**2
+    _strength_responses: OrderedDict = field(default_factory=OrderedDict, init=False, repr=False)
+    _factor_uses: OrderedDict = field(default_factory=OrderedDict, init=False, repr=False)
 
     def __post_init__(self):
         if type(self.cone_cache_maximum_bytes) is not int or self.cone_cache_maximum_bytes < 0:
             raise ValueError("cone cache memory budget must be a nonnegative integer")
+        if (
+            type(self.strength_cache_maximum_bytes) is not int
+            or self.strength_cache_maximum_bytes < 0
+        ):
+            raise ValueError("strength cache memory budget must be a nonnegative integer")
+        if not isinstance(self.atomic_query_cache, AtomicQueryCache):
+            raise TypeError("atomic_query_cache must be an AtomicQueryCache")
+        if (
+            type(self.aggregation_cache_maximum_bytes) is not int
+            or self.aggregation_cache_maximum_bytes < 0
+        ):
+            raise ValueError("aggregation cache memory budget must be a nonnegative integer")
         if self.spatial_execution not in {"auto", "cpu", "cuda"}:
             raise ValueError("native spatial execution must be auto, cpu or cuda")
         if not isinstance(self.spatial_executor, NativeSpatialExecutor):
@@ -118,133 +140,273 @@ class NativeJointEvaluator:
             physics = self.instrument_model.bind(physics, values[-18:])
         return physics, arguments, mosaic, stack
 
-    def predict(self, values, coherent_repeats, *, resolve_mosaic_components: bool = False):
-        """Raw native masses, or complete (Gaussian/Lorentzian, observation) columns.
+    def predict(self, values, coherent_repeats, *, resolve_mosaic_components=False):
+        """Complete raw native masses with the same preparation as batched calls."""
+        values = np.asarray(values)
+        if values.ndim != 1:
+            raise ValueError("a native candidate must be a vector")
+        return self.predict_many(
+            values[None, :], coherent_repeats, resolve_mosaic_components=resolve_mosaic_components
+        )[0]
 
-        Each pure component prepares its own angular panels, including inactive
-        eta-boundary components. Exact component predictions have their own cache
-        identity. Their recombination remains subject to numerical qualification.
-        """
-        if type(resolve_mosaic_components) is not bool:
-            raise TypeError("resolve_mosaic_components must be boolean")
+    def predict_many(self, values, coherent_repeats, *, resolve_mosaic_components=False):
+        """Reuse exact dependencies across bounded groups; preserve input ordering."""
         values = np.asarray(values)
         if (
-            values.shape != (len(self.parameter_names),)
+            values.ndim != 2
+            or values.shape[1] != len(self.parameter_names)
             or np.iscomplexobj(values)
             or np.any(~np.isfinite(values))
             or type(coherent_repeats) is not int
             or coherent_repeats < 1
         ):
-            raise ValueError(
-                "native candidate requires a finite aligned vector and positive integer N"
-            )
-        values = np.asarray(values, dtype=float)
-        candidate_key = coherent_repeats, values.tobytes(), resolve_mosaic_components
-        if candidate_key in self._predictions:
-            self._predictions.move_to_end(candidate_key)
-            return self._predictions[candidate_key]
-        physics, arguments, mosaic, stack = self.bind(values, coherent_repeats)
-        prediction = sum(
-            (
-                self._predict_part(
-                    part,
-                    arguments,
-                    mosaic,
-                    stack,
-                    resolve_mosaic_components=resolve_mosaic_components,
-                )
-                for part in physics.integration_parts()
-            ),
-            np.zeros(
-                (2, len(self.observations.net_count))
-                if resolve_mosaic_components
-                else len(self.observations.net_count)
-            ),
+            raise ValueError("native candidates require finite aligned rows and positive integer N")
+        if type(resolve_mosaic_components) is not bool:
+            raise TypeError("resolve_mosaic_components must be boolean")
+        values = np.asarray(values, dtype=np.float64)
+        shape = (
+            (len(values), 2, len(self.observations.net_count))
+            if resolve_mosaic_components
+            else (len(values), len(self.observations.net_count))
         )
-        prediction.setflags(write=False)
-        self._predictions[candidate_key] = prediction
-        while len(self._predictions) > 64:
-            self._predictions.popitem(last=False)
-        object.__setattr__(self, "evaluation_count", self.evaluation_count + 1)
-        return prediction
+        result = np.empty(shape)
+        for start in range(0, len(values), 8):
+            rows = values[start : start + 8]
+            keys = [(coherent_repeats, row.tobytes(), resolve_mosaic_components) for row in rows]
+            missing = {}
+            for key, row in zip(keys, rows, strict=True):
+                if key not in self._predictions:
+                    missing.setdefault(key, row)
+            predictions = {key: np.zeros(shape[1:]) for key in missing}
+            contributions = {key: [] for key in missing}
+            groups = {}
+            for key, row in missing.items():
+                physics, arguments, mosaic, stack = self.bind(row, coherent_repeats)
+                if resolve_mosaic_components:
+                    if mosaic.gaussian_sigma_rad <= 0 or mosaic.lorentzian_half_width_rad <= 0:
+                        raise ValueError(
+                            "component predictions require both positive mosaic widths"
+                        )
+                    laws = (
+                        MosaicParameters(mosaic.gaussian_sigma_rad, 0.0, 0.0),
+                        MosaicParameters(0.0, mosaic.lorentzian_half_width_rad, 1.0),
+                    )
+                else:
+                    laws = (mosaic,)
+                for part in physics.integration_parts():
+                    for component, law in enumerate(laws):
+                        slot = len(contributions[key])
+                        contributions[key].append(None)
+                        detector = replace(
+                            part.detector(mosaic=law, **arguments),
+                            proposal_mosaic=self.proposal_mosaic,
+                            specular_stitch_stack=stack,
+                            spatial_execution=self.spatial_execution,
+                            spatial_executor=self.spatial_executor,
+                        )
+                        if detector.integration_rule.regular_rule == "fixed_importance.v1":
+                            revision = detector.native_response_revision(
+                                self.observations.projection
+                            )
+                            groups.setdefault(revision, []).append((key, component, detector, slot))
+                        else:
+                            begun = perf_counter()
+                            raw = detector.integrate_native_regions(
+                                self.observations.projection, scattering_cache=self.scattering_cache
+                            )
+                            contributions[key][slot] = component, raw
+                            object.__setattr__(
+                                self,
+                                "compile_seconds",
+                                self.compile_seconds + perf_counter() - begun,
+                            )
+                            object.__setattr__(self, "compile_count", self.compile_count + 1)
+                            object.__setattr__(
+                                self, "contraction_count", self.contraction_count + 1
+                            )
+            for revision, entries in groups.items():
+                response = self._response(entries[0][2], revision)
+                # Each batch binds a single actual mosaic. Width probes therefore
+                # do not retain a packet per candidate outside the cone byte cap.
+                compatible = {}
+                for entry in entries:
+                    compatible.setdefault(entry[2].mosaic, []).append(entry)
+                for subset in compatible.values():
+                    for offset in range(0, len(subset), 8):
+                        chunk = subset[offset : offset + 8]
+                        detectors = [entry[2] for entry in chunk]
+                        cones = self._cones(response, detectors[0], revision)
+                        tables = [
+                            self._tables(response, detector, revision) for detector in detectors
+                        ]
+                        factors = {response.factor_revision(detector) for detector in detectors}
+                        aggregate = (
+                            self._aggregate(response, detectors[0], revision, cones, len(chunk))
+                            if len(factors) == 1
+                            else None
+                        )
+                        if aggregate is not None:
+                            raw = aggregate.evaluate_many(
+                                detectors,
+                                self.observations.projection,
+                                cone_components=cones,
+                                strength_tables=tables,
+                            )
+                        elif len(chunk) == 1:
+                            raw = response.evaluate(
+                                detectors[0],
+                                self.observations.projection,
+                                cone_components=cones,
+                                strength_tables=tables[0],
+                            )[None, :]
+                        else:
+                            raw = response.evaluate_many(
+                                detectors,
+                                self.observations.projection,
+                                cone_components=[cones] * len(chunk),
+                                strength_tables=tables,
+                            )
+                        for (key, component, _, slot), row in zip(chunk, raw, strict=True):
+                            contributions[key][slot] = component, row
+                        object.__setattr__(
+                            self, "contraction_count", self.contraction_count + len(chunk)
+                        )
+            for key, prediction in predictions.items():
+                # Response grouping must not reorder the physical part reduction.
+                for component, raw in contributions[key]:
+                    if resolve_mosaic_components:
+                        prediction[component] += raw
+                    else:
+                        prediction += raw
+                prediction.setflags(write=False)
+                self._predictions[key] = prediction
+                object.__setattr__(self, "evaluation_count", self.evaluation_count + 1)
+            for i, key in enumerate(keys):
+                self._predictions.move_to_end(key)
+                result[start + i] = self._predictions[key]
+            while len(self._predictions) > 64:
+                self._predictions.popitem(last=False)
+        result.setflags(write=False)
+        return result
 
-    def _predict_part(self, physics, arguments, mosaic, stack, *, resolve_mosaic_components=False):
-        """Reprepare adaptive candidates; reuse only explicitly strength-free responses."""
-        if resolve_mosaic_components:
-            if mosaic.gaussian_sigma_rad <= 0 or mosaic.lorentzian_half_width_rad <= 0:
-                raise ValueError("component predictions require both positive mosaic widths")
-            laws = (
-                MosaicParameters(mosaic.gaussian_sigma_rad, 0.0, 0.0),
-                MosaicParameters(0.0, mosaic.lorentzian_half_width_rad, 1.0),
-            )
-        else:
-            laws = (mosaic,)
-        predictions = []
-        for law in laws:
-            start = perf_counter()
-            detector = physics.detector(mosaic=law, **arguments)
-            detector = replace(
-                detector,
-                proposal_mosaic=self.proposal_mosaic,
-                specular_stitch_stack=stack,
-                spatial_execution=self.spatial_execution,
-                spatial_executor=self.spatial_executor,
-            )
-            projection = self.observations.projection
-            if detector.integration_rule.regular_rule == "fixed_importance.v1":
-                key = detector.native_response_revision(projection)
-                if key not in self._responses:
-                    while len(self._responses) >= 2:
-                        evicted = next(iter(self._responses))
-                        del self._responses[evicted]
-                        self._cone_densities.pop(evicted, None)
-                    response = detector.compile_native_response(projection)
-                    self._responses[key] = response
-                    object.__setattr__(self, "compile_count", self.compile_count + 1)
-                    object.__setattr__(
-                        self, "compile_seconds", self.compile_seconds + perf_counter() - start
-                    )
-                self._responses.move_to_end(key)
-                response = self._responses[key]
-                cone = self._cone_densities.get(key)
-                order = detector.integration_rule.cone_quadrature_order
-                if cone is not None and (
-                    cone.response is not response
-                    or cone.density.parameters != law
-                    or cone.quadrature_order != order
+    def _response(self, detector, revision):
+        if revision not in self._responses:
+            while len(self._responses) >= 2:
+                evicted = next(iter(self._responses))
+                del self._responses[evicted]
+                for cache in (
+                    self._cone_densities,
+                    self._strength_tables,
+                    self._strength_responses,
+                    self._factor_uses,
                 ):
-                    del self._cone_densities[key]
-                    cone = None
-                if cone is not None:
-                    self._cone_densities.move_to_end(key)
-                    object.__setattr__(self, "cone_reuse_count", self.cone_reuse_count + 1)
-                elif (
-                    self.cone_cache_maximum_bytes
-                    and response.cone_density_bytes <= self.cone_cache_maximum_bytes
-                ):
-                    while self._cone_densities and (
-                        self.cone_cache_retained_bytes + response.cone_density_bytes
-                        > self.cone_cache_maximum_bytes
-                    ):
-                        self._cone_densities.popitem(last=False)
-                    cone = response.compile_cone_density(
-                        law, quadrature_order=order, maximum_bytes=self.cone_cache_maximum_bytes
-                    )
-                    self._cone_densities[key] = cone
-                    object.__setattr__(self, "cone_compile_count", self.cone_compile_count + 1)
-                predictions.append(response.evaluate(detector, projection, cone_density=cone))
+                    for key in tuple(cache):
+                        if key[0] == evicted:
+                            del cache[key]
+            begun = perf_counter()
+            self._responses[revision] = detector.compile_native_response(
+                self.observations.projection
+            )
+            object.__setattr__(self, "compile_count", self.compile_count + 1)
+            object.__setattr__(
+                self, "compile_seconds", self.compile_seconds + perf_counter() - begun
+            )
+        self._responses.move_to_end(revision)
+        return self._responses[revision]
+
+    def _cones(self, response, detector, revision):
+        mosaic = detector.mosaic
+        eta = mosaic.lorentzian_probability
+        if (
+            response.cone_density_bytes * (int(eta < 1) + int(eta > 0))
+            > self.cone_cache_maximum_bytes
+            or not self.cone_cache_maximum_bytes
+        ):
+            return None
+        order = detector.integration_rule.cone_quadrature_order
+        laws = (
+            MosaicParameters(mosaic.gaussian_sigma_rad, 0.0, 0.0),
+            MosaicParameters(0.0, mosaic.lorentzian_half_width_rad, 1.0),
+        )
+        active = [
+            (revision, law, order)
+            for law, weight in zip(laws, (1 - eta, eta), strict=True)
+            if weight > 0
+        ]
+        # Reserve the whole active pair before compiling; inactive old widths may evict.
+        required = sum(
+            response.cone_density_bytes for key in active if key not in self._cone_densities
+        )
+        for key in tuple(self._cone_densities):
+            if self.cone_cache_retained_bytes + required <= self.cone_cache_maximum_bytes:
+                break
+            if key not in active:
+                del self._cone_densities[key]
+        components = []
+        for law, weight in zip(laws, (1 - eta, eta), strict=True):
+            if weight == 0:
+                components.append(None)
+                continue
+            key = revision, law, order
+            packet = self._cone_densities.get(key)
+            if packet is None:
+                packet = response.compile_cone_density(
+                    law, quadrature_order=order, maximum_bytes=self.cone_cache_maximum_bytes
+                )
+                self._cone_densities[key] = packet
+                object.__setattr__(self, "cone_compile_count", self.cone_compile_count + 1)
             else:
-                predictions.append(
-                    detector.integrate_native_regions(
-                        projection, scattering_cache=self.scattering_cache
-                    )
-                )
-                object.__setattr__(
-                    self, "compile_seconds", self.compile_seconds + perf_counter() - start
-                )
-                object.__setattr__(self, "compile_count", self.compile_count + 1)
-            object.__setattr__(self, "contraction_count", self.contraction_count + 1)
-        return np.stack(predictions) if resolve_mosaic_components else predictions[0]
+                if packet.response is not response:
+                    raise ValueError("cone cache response ownership differs")
+                self._cone_densities.move_to_end(key)
+                object.__setattr__(self, "cone_reuse_count", self.cone_reuse_count + 1)
+            components.append(packet)
+        return tuple(components)
+
+    def _tables(self, response, detector, revision):
+        key = revision, response.strength_revision(detector)
+        tables = self._strength_tables.get(key)
+        if tables is not None:
+            self._strength_tables.move_to_end(key)
+            return tables
+        tables = response.compile_strength_tables(detector, query_cache=self.atomic_query_cache)
+        if (
+            self.strength_cache_maximum_bytes
+            and tables.retained_bytes <= self.strength_cache_maximum_bytes
+        ):
+            while (
+                self._strength_tables
+                and sum(t.retained_bytes for t in self._strength_tables.values())
+                + tables.retained_bytes
+                > self.strength_cache_maximum_bytes
+            ):
+                self._strength_tables.popitem(last=False)
+            self._strength_tables[key] = tables
+        return tables
+
+    def _aggregate(self, response, detector, revision, cones, candidate_count):
+        if not self.aggregation_cache_maximum_bytes or cones is None:
+            return None
+        key = revision, response.factor_revision(detector)
+        uses = self._factor_uses.get(key, 0) + candidate_count
+        self._factor_uses[key] = uses
+        self._factor_uses.move_to_end(key)
+        while len(self._factor_uses) > 16:
+            self._factor_uses.popitem(last=False)
+        if uses < 2:
+            return None
+        aggregate = self._strength_responses.get(key)
+        if aggregate is None:
+            # Evict before construction; its cap includes temporary aggregation work.
+            self._strength_responses.clear()
+            aggregate = response.compile_strength_response(
+                detector,
+                self.observations.projection,
+                cone_components=cones,
+                maximum_bytes=self.aggregation_cache_maximum_bytes,
+            )
+            self._strength_responses[key] = aggregate
+        return aggregate if aggregate.retained_bytes else None
 
     @property
     def cone_cache_retained_bytes(self):
@@ -257,6 +419,10 @@ class NativeJointEvaluator:
         self._predictions.clear()
         self._responses.clear()
         self._cone_densities.clear()
+        self._strength_tables.clear()
+        self._strength_responses.clear()
+        self._factor_uses.clear()
+        self.atomic_query_cache.clear()
 
     def inactive_parameters(self, values, coherent_repeats):
         """Exact physical inactivity at mixture boundaries; coordinates stay free.

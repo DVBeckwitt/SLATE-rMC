@@ -1,6 +1,6 @@
 """Positive native-pixel background masses and conditional exposure profiling."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 from scipy.interpolate import BSpline
@@ -172,6 +172,9 @@ class NativeLinearBackgroundProblem:
 
     design_count: np.ndarray
     maximum_iterations: int = 10000
+    _observations: NativeFitObservations | None = field(default=None, init=False, repr=False)
+    _white_background: np.ndarray | None = field(default=None, init=False, repr=False)
+    _background_norms: np.ndarray | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         raw = np.asarray(self.design_count)
@@ -193,9 +196,40 @@ class NativeLinearBackgroundProblem:
     def observation_count(self):
         return self.design_count.shape[0]
 
+    def prepare(self, observations):
+        """Bind fixed covariance work explicitly; candidate NNLS remains fresh."""
+        if self._observations is observations:
+            return self
+        if (
+            observations.objective_kind != "gls"
+            or observations.exposure_index is not None
+            or observations.allow_guard_constraints
+            or len(observations.net_count) != self.observation_count
+        ):
+            raise ValueError("linear background requires single-exposure raw GLS without guards")
+        white = solve_triangular(
+            observations._cholesky, self.design_count[observations.valid], lower=True
+        )
+        norms = np.linalg.norm(white, axis=0)
+        if np.any(~np.isfinite(white)) or np.any(~np.isfinite(norms)):
+            raise ValueError("linear background whitening or column norms overflowed")
+        norms = np.where(norms > np.finfo(float).tiny, norms, 1.0)
+        white /= norms
+        white.setflags(write=False)
+        norms.setflags(write=False)
+        prepared = replace(self)
+        object.__setattr__(prepared, "_observations", observations)
+        object.__setattr__(prepared, "_white_background", white)
+        object.__setattr__(prepared, "_background_norms", norms)
+        return prepared
+
     def profile(self, observations, raw, *, callback=None, mixture_bounds=None):
         if mixture_bounds is not None:
             raise ValueError("linear background does not profile mosaic mixtures")
+        if self._observations is None:
+            return self.prepare(observations).profile(observations, raw, callback=callback)
+        if self._observations is not observations:
+            raise ValueError("prepared background belongs to different observations")
         if (
             observations.objective_kind != "gls"
             or observations.exposure_index is not None
@@ -211,24 +245,23 @@ class NativeLinearBackgroundProblem:
             or np.any(raw < 0)
         ):
             raise ValueError("linear background requires an aligned nonnegative physical signal")
-        design = np.column_stack((raw, self.design_count))
-        white = solve_triangular(observations._cholesky, design[observations.valid], lower=True)
-        norms = np.linalg.norm(white, axis=0)
+        white = observations.whiten(raw)
+        norms = np.r_[np.linalg.norm(white), self._background_norms]
         if np.any(~np.isfinite(white)) or np.any(~np.isfinite(norms)):
             raise ValueError("linear background whitening or column norms overflowed")
         if norms[0] <= np.finfo(float).tiny:
             raise ValueError("linear background requires scale-identifying diffraction")
         norms = np.where(norms > np.finfo(float).tiny, norms, 1.0)
-        normalized = white / norms
+        normalized = np.column_stack((white / norms[0], self._white_background))
+        target = observations._whitened_net
         try:
             coefficients, _ = nnls(
                 normalized,
-                observations.whiten(observations.net_count),
+                target,
                 maxiter=self.maximum_iterations,
             )
         except RuntimeError as exc:
             raise BackgroundProfileError(OptimizeResult(success=False, message=str(exc))) from exc
-        target = observations.whiten(observations.net_count)
         gradient = normalized.T @ (normalized @ coefficients - target)
         active = coefficients > 0
         kkt_error = float(np.max(np.where(active, abs(gradient), np.maximum(-gradient, 0))))

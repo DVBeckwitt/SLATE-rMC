@@ -450,8 +450,11 @@ def main():
 
     def execute_batch(values, n):
         if prediction_workers == 1:
-            for index, row in enumerate(values):
-                yield index, evaluator.predict(row, n)
+            for start in range(0, len(values), 8):
+                for offset, prediction in enumerate(
+                    evaluator.predict_many(values[start : start + 8], n)
+                ):
+                    yield start + offset, prediction
             return
         # Group exact response dependencies together; each process owns its evaluator.
         excluded = {

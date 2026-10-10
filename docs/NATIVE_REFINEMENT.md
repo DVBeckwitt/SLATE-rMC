@@ -1090,15 +1090,17 @@ only terms guaranteed to underflow to zero are skipped. Wider and subnormal widt
 retain the existing wrapped-image/Fourier calculation. First use includes native
 compilation, so distinguish that setup time from repeated candidate timing.
 
-For fixed-importance fitting, `NativeJointEvaluator` automatically retains one
-immutable `NativeConeDensity` packet per response when it fits within
+For fixed-importance fitting, `NativeJointEvaluator` automatically retains separate
+immutable pure Gaussian and Lorentzian `NativeConeDensity` packets within
 `cone_cache_maximum_bytes` (default 256 MiB total, independent of the geometry cap).
-A structural update at fixed geometry and mosaic reuses these densities; a changed
-mosaic or cone order rebuilds them. Geometry eviction releases the associated
-packet. Use `cone_cache_maximum_bytes=0` to disable retention. Oversized packets
+A structural update or mixture-weight change reuses these densities; a changed
+width rebuilds only its component. Cone order remains part of the key. Mixtures
+combine per block without retaining a third packet. Geometry eviction releases
+associated packets. Use `cone_cache_maximum_bytes=0` to disable retention. The full
+active pair must fit before allocation; oversized pairs
 use the same direct calculation, without changing precision or the physical model.
 `cone_compile_count`, `cone_reuse_count` and `cone_cache_retained_bytes` expose this
-work and storage. `clear_responses()` releases both response and cone caches.
+work and storage. `clear_responses()` releases all evaluator preparation caches.
 
 Direct response callers can use `response.compile_cone_density(mosaic,
 quadrature_order=order, maximum_bytes=budget)` and pass the result as
@@ -1108,6 +1110,52 @@ preparation copies, shared geometry and process/JIT memory require separate boun
 The adaptive estimator benefits from the compiled cone arithmetic but does not
 reuse fixed-response packets. This acceleration adds no optimizer and changes no
 background, covariance, preservation gate or fit-qualification requirement.
+
+### Shared preparation and candidate batches
+
+Call `evaluator.predict_many(candidate_rows, coherent_repeats)` for finite-difference
+or other aligned candidate batches. It uses the same binding and validation as
+`predict`, preserves input order (including duplicates), and evaluates groups of
+at most eight candidates. Geometry, mosaic components and fixed factors are shared
+only under exact dependency identities; different instrument or source geometry
+receives its own response. Physical integration parts are reduced in their original
+order. Adaptive estimators still prepare every distinct candidate.
+
+The refinement CLI and workflow group workers use this API automatically. With
+one prediction worker, successful groups of up to eight predictions are written
+to recovery storage after each group completes. A failure inside a group does not
+publish that unfinished group; previously completed groups remain recoverable.
+
+Each evaluator owns an `AtomicQueryCache` (128 MiB by default) for exact HKL/basis/
+wavelength query geometry and XrayDB species factors. Site positions, occupancy,
+displacement and complex amplitudes are recalculated. Bi2X3, PbI2 and generic CIF
+providers opt in; arbitrary provider protocols remain unchanged. Exact signed
+strength/stitch tables have a separate `strength_cache_maximum_bytes` cap (128 MiB).
+
+After repeated compatible use, fixed cone/source/envelope/attenuation factors can
+be combined into a smaller axial-to-observation matrix. Its separate
+`aggregation_cache_maximum_bytes` cap defaults to 128 MiB and accounts for retained
+arrays plus temporary construction. Blocks that do not reduce sparse work, exceed
+the budget, or risk unsafe multiplication reassociation use the canonical event
+path. Direct callers can inspect `response.compile_strength_response(...)` via
+its `admission` and candidate-specific `admission_for(strength_tables)`. Zero caps
+disable the corresponding retention. These are numeric-array budgets, not process
+memory limits; Python, compilation and ordinary candidate temporaries are additional.
+
+Region projection visits only occupied detector columns. Independent event chunks
+automatically use up to four CPU workers, bounded by the caller's Numba thread allowance and
+`NativeSpatialExecutor.region_workspace_bytes` (64 MiB default). Set `region_workers=1`
+for serial operation; zero selects automatically. Final CSR arrays, completed chunks
+awaiting assembly and assembly copies are outside that concurrent workspace cap.
+`last_decision` reports admitted workers or a workspace decline. The raster CPU/GPU
+selector remains unchanged; sparse region compilation remains CPU-only.
+
+`fit_native_parameters` prepares fixed background columns once automatically.
+Repeated direct profiling callers should retain
+`prepared = background_problem.prepare(observations)` and use
+`prepared.profile(observations, raw_prediction)`. A prepared object rejects another
+observation owner. Signed observations, control masks, covariance, rank and KKT
+requirements remain unchanged; preparation is not a background adequacy check.
 
 
 ### Shared structure and response kernels

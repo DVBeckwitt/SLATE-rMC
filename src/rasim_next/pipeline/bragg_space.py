@@ -33,7 +33,7 @@ from rasim_next.ordered import (
     uniform_finite_stack,
     unit_cell_amplitude,
 )
-from rasim_next.ordered.amplitudes import _validated_site_displacement_tensors
+from rasim_next.ordered.amplitudes import AtomicQueryCache, _validated_site_displacement_tensors
 from rasim_next.ordered.motifs import pbi2_surface_motif_crystals
 from rasim_next.reciprocal.lattice import ReciprocalLattice
 from rasim_next.stacking import (
@@ -262,6 +262,7 @@ class Pbi2FiniteSurfaceStrength:
         k: ArrayLike,
         L: ArrayLike,
         k_norm_Ainv: ArrayLike,
+        query_cache: AtomicQueryCache | None = None,
     ) -> FloatArray:
         """Return [surface,population,...query] before independent mixture weights."""
         for value, name in ((h, "h"), (k, "k"), (L, "L"), (k_norm_Ainv, "k_norm_Ainv")):
@@ -288,6 +289,7 @@ class Pbi2FiniteSurfaceStrength:
                         2 * np.pi / knorm,
                         unknown_u_iso_A2=self.unknown_u_iso_A2,
                         site_displacement_tensors_A2=tensor,
+                        query_cache=query_cache,
                     ).amplitude_e
                     for m, tensor in zip(orientation, tensors, strict=True)
                 ]
@@ -327,8 +329,11 @@ class Pbi2FiniteSurfaceStrength:
         k: ArrayLike,
         L: ArrayLike,
         k_norm_Ainv: ArrayLike,
+        query_cache: AtomicQueryCache | None = None,
     ) -> FloatArray:
-        components = self.evaluate_components_hkl(h=h, k=k, L=L, k_norm_Ainv=k_norm_Ainv)
+        components = self.evaluate_components_hkl(
+            h=h, k=k, L=L, k_norm_Ainv=k_norm_Ainv, query_cache=query_cache
+        )
         return np.einsum(
             "s,p,sp...->...", self.surface_fractions, self.population_fractions, components
         )
@@ -481,6 +486,7 @@ class CifFiniteStackStrength:
         k: ArrayLike,
         L: ArrayLike,
         k_norm_Ainv: ArrayLike,
+        query_cache: AtomicQueryCache | None = None,
     ) -> FloatArray:
         """Vectorize the CIF strength over mixed rods, wavelengths, and exact ``L``."""
 
@@ -516,6 +522,7 @@ class CifFiniteStackStrength:
             2.0 * np.pi / k_norm,
             unknown_u_iso_A2=self.unknown_u_iso_A2,
             site_displacement_tensors_A2=self.site_displacement_tensors_A2,
+            query_cache=query_cache,
         ).amplitude_e
         repeat = finite_periodic_repeat_amplitude_factor(ell, self.repeats)
         strength = electron_squared_to_scattering_strength_A2(np.abs(amplitude * repeat) ** 2)
@@ -803,6 +810,7 @@ class Bi2X3FiniteStackStrength:
         k: ArrayLike,
         L: ArrayLike,
         k_norm_Ainv: ArrayLike,
+        query_cache: AtomicQueryCache | None = None,
     ) -> FloatArray:
         """Vectorize the authoritative strength over mixed physical rods and exact L."""
 
@@ -817,6 +825,7 @@ class Bi2X3FiniteStackStrength:
             query,
             structure_parameters=self.structure_parameters,
             site_displacement_profile=self.site_displacement_profile,
+            query_cache=query_cache,
         )
         law = RichEpsilonModel(
             self.parent,

@@ -160,5 +160,5 @@ def native_prediction_group(
 ):
     """One process-local evaluator, reused across a bounded group of candidates."""
     evaluator = make_native_evaluator(physics, observations, plan, model=model)
-    predictions = [evaluator.predict(row, repeats) for row in values]
+    predictions = evaluator.predict_many(values, repeats)
     return (predictions, evaluator.spatial_executor.summary()) if include_execution else predictions

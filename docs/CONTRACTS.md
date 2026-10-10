@@ -28,14 +28,18 @@ support and original attempted divisors remain; repaired CDF inversion keeps its
 
 `NativeFixedResponse` retains grids, geometry factors and sparse weighted region
 probabilities only under an explicit projection/source/optics/geometry/proposal/rule
-identity. Every evaluation recomputes signed strengths, thickness attenuation and
-local stitch, and applies original source probability once. An explicit immutable
+identity. Every evaluation binds current signed strengths, thickness attenuation and
+local stitch, and applies original source probability once. Exact immutable strength
+tables may be reused only for unchanged structure, basis, wavelengths, optics,
+thickness and stitch rules. An explicit immutable
 `NativeConeDensity` packet may reuse both signed spherical cone densities only for
 the exact response instance, actual mosaic parameters and cone quadrature order.
-`NativeJointEvaluator` retains at most one such packet per response under a separate
-256 MiB total numeric-array cap (`cone_cache_maximum_bytes`); zero disables this
-retention and oversized packets use the same uncached calculation. Changing the
-mosaic replaces its packet; response eviction also releases that packet. These
+`NativeJointEvaluator` retains separate pure Gaussian and Lorentzian packets under
+a 256 MiB total numeric-array cap (`cone_cache_maximum_bytes`). Changing the mixture
+weight reuses both; changing one width rebuilds only that component. The complete
+active pair must fit before preparation; zero or insufficient capacity selects the
+canonical direct calculation. Mixtures combine per block, without a third retained
+packet. Response eviction releases all associated preparation. These
 shared mechanisms apply to every material using this estimator. A changed response
 identity requires compilation. The default 1 GiB cap covers retained numeric grid/node/CSR
 arrays, excluding temporary projection/transfer storage and Python metadata; callers
@@ -44,6 +48,28 @@ responses and evicts before a third compilation. Region compilation is CPU-only;
 `auto` or `cpu` accepts it, while forced `cuda` raises. Native raster terminals retain
 their existing automatic selector. Nominal and finer observable/contrast checks
 remain necessary before scientific selection; cache parity is not fit qualification.
+
+`predict_many` preserves candidate and physical-part order while grouping at most
+eight compatible candidates for shared sparse traversal. Atomic query/factor arrays,
+signed strength tables and fixed-factor axial aggregation each have separate default
+128 MiB caps. Atomic caches never retain amplitudes. Aggregation uses the canonical
+event factors and is admitted only when sparse work decreases, its retained plus
+construction arrays fit, and reassociation stays within the admitted float64 range.
+`NativeStrengthResponse.admission` records preparation reasons; `admission_for(tables)`
+also reports candidate strength-range declines. Declined blocks use canonical event
+arithmetic. Geometry/mosaic/source/envelope changes invalidate aggregated factors.
+
+`NativeSpatialExecutor` automatically admits up to four CPU region workers within
+the caller's Numba thread allowance. Workers own disjoint event rows, preserving
+all CSR row order. Its 64 MiB default region workspace limits concurrent chunk
+arrays and scratch; final CSR storage, accumulated completed chunks and assembly
+copies are separately owned response storage. Serial execution remains available
+when concurrency cannot fit. Array caps exclude Python/JIT metadata and are not
+process-RSS limits. No probability pruning or precision reduction is introduced.
+
+`NativeLinearBackgroundProblem.prepare(observations)` binds immutable normalized
+whitened background columns to the exact observation owner. Profiling whitens only
+the current signal and retains NNLS, covariance/rank and normalized KKT checks.
 
 `NativeRefinementModel` supplies names, units, a physical binding and exact inactivity rules.
 Built-in Bi/Pb symmetry rules live in those models. Search, observations, instrument binding,

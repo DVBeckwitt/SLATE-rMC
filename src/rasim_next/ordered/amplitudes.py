@@ -2,18 +2,68 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import OrderedDict
+from dataclasses import dataclass, field
 
 import numba
 import numpy as np
 import xraydb
 from numpy.typing import ArrayLike, NDArray
 
-from rasim_next.core.contracts import EventIntensityResult, RodCatalog, RodQueryBatch
+from rasim_next.core.contracts import (
+    EventIntensityResult,
+    RodCatalog,
+    RodQueryBatch,
+    canonical_revision_sha256,
+)
 from rasim_next.core.scattering import electron_squared_to_scattering_strength_A2
 from rasim_next.materials.crystal import CrystalStructure
 from rasim_next.materials.optics import atomic_scattering_factor_e
 from rasim_next.reciprocal.lattice import ReciprocalLattice
+
+
+@dataclass(slots=True)
+class AtomicQueryCache:
+    """Caller-owned, byte-bounded exact query/factor preparation; never amplitudes."""
+
+    maximum_bytes: int = 128 * 1024**2
+    _entries: OrderedDict = field(default_factory=OrderedDict, init=False, repr=False)
+    retained_bytes: int = field(default=0, init=False)
+    hits: int = field(default=0, init=False)
+    misses: int = field(default=0, init=False)
+
+    def __post_init__(self):
+        if type(self.maximum_bytes) is not int or self.maximum_bytes < 0:
+            raise ValueError("atomic preparation budget must be a nonnegative integer")
+
+    def get(self, key):
+        entry = self._entries.get(key)
+        if entry is None:
+            self.misses += 1
+            return None
+        self.hits += 1
+        self._entries.move_to_end(key)
+        return entry[0]
+
+    def retain(self, key, value):
+        arrays = [v for v in value if isinstance(v, np.ndarray)]
+        size = sum(v.nbytes for v in arrays)
+        if not self.maximum_bytes or size > self.maximum_bytes:
+            return
+        previous = self._entries.pop(key, None)
+        if previous is not None:
+            self.retained_bytes -= previous[1]
+        while self._entries and self.retained_bytes + size > self.maximum_bytes:
+            _, (_, removed) = self._entries.popitem(last=False)
+            self.retained_bytes -= removed
+        for array in arrays:
+            array.setflags(write=False)
+        self._entries[key] = value, size
+        self.retained_bytes += size
+
+    def clear(self):
+        self._entries.clear()
+        self.retained_bytes = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +135,7 @@ def unit_cell_amplitude(
     unknown_u_iso_A2: float | None = None,
     shared_displacement_tensor_A2: ArrayLike | None = None,
     site_displacement_tensors_A2: ArrayLike | None = None,
+    query_cache: AtomicQueryCache | None = None,
 ) -> StructureAmplitudeResult:
     """Evaluate the positive-phase structure sum at arbitrary Miller coordinates."""
 
@@ -148,38 +199,28 @@ def unit_cell_amplitude(
     ):
         raise ValueError("unknown isotropic displacement requires an explicit calculation value")
 
-    lattice = ReciprocalLattice.from_crystal(crystal)
-    flat_indices = indices.reshape(-1, 3)
-    wavelength_flat = wavelength.reshape(-1)
-    inverse = None
-    if indices.ndim >= 3 and indices.shape[-2] >= 32:
-        # Native tables carry whole axial rows. Match opposite rows in linear
-        # work; sorting every query or looping over short rows costs more than
-        # the saved atomic sums. The long-row threshold brackets measured work.
-        width = indices.shape[-2]
-        rows = indices.reshape(-1, width, 3)
-        waves = wavelength.reshape(-1, width)
-        selected, lookup, inverted, row_by_key = [], [], [], {}
-        for i, (row, wave) in enumerate(zip(rows, waves, strict=True)):
-            partner = row_by_key.get((*(-row[0]), wave[0]))
-            reuse = (
-                partner is not None
-                and np.array_equal(row, -rows[selected[partner]])
-                and np.array_equal(wave, waves[selected[partner]])
-            )
-            if reuse:
-                lookup.append(partner)
-            else:
-                row_by_key[(*row[0], wave[0])] = len(selected)
-                lookup.append(len(selected))
-                selected.append(i)
-            inverted.append(reuse)
-        if len(selected) < len(rows):
-            flat_indices = rows[selected].reshape(-1, 3)
-            wavelength_flat = waves[selected].reshape(-1)
-            inverse = np.asarray(lookup)
-    q_vectors = lattice.q_cartesian_Ainv(flat_indices).reshape(-1, 3)
-    q_magnitude = np.linalg.norm(q_vectors, axis=1)
+    if query_cache is not None and not isinstance(query_cache, AtomicQueryCache):
+        raise TypeError("query_cache must be an AtomicQueryCache")
+    query_key = (
+        canonical_revision_sha256(
+            ("definition", "atomic_query.v1"),
+            ("basis", crystal.direct_basis_A),
+            ("hkl", indices),
+            ("wavelength", wavelength),
+        )
+        if query_cache is not None
+        else None
+    )
+    prepared = None if query_cache is None else query_cache.get(("query", query_key))
+    if prepared is None:
+        prepared = _prepare_amplitude_query(crystal, indices, wavelength)
+        if query_cache is not None:
+            query_cache.retain(("query", query_key), prepared)
+    q_vectors, q_magnitude, wavelength_flat, inverse, inverted, width = prepared
+    database = (
+        xraydb.__version__,
+        xraydb.get_xraydb().get_version(),
+    )
     fractional = np.asarray([site.fractional for site in crystal.sites], dtype=np.float64)
     positions_A = fractional @ crystal.direct_basis_A.T
     u_iso = None
@@ -187,7 +228,6 @@ def unit_cell_amplitude(
     if displacement_tensor is not None:
         isotropic_u_A2 = float(displacement_tensor[0, 0])
         if np.array_equal(displacement_tensor, isotropic_u_A2 * np.eye(3)):
-            # Shared tensors admit roundoff-sized negative eigenvalues.
             u_iso = np.full(len(crystal.sites), max(isotropic_u_A2, 0.0))
         else:
             tensors = np.broadcast_to(displacement_tensor, (len(crystal.sites), 3, 3))
@@ -214,13 +254,19 @@ def unit_cell_amplitude(
             dtype=np.bool_,
             count=len(crystal.sites),
         )
-        factor, mapping = atomic_scattering_factor_e(
-            species=species,
-            element=element,
-            charge=charge,
-            q_magnitude_Ainv=q_magnitude,
-            wavelength_A=wavelength_flat,
-        )
+        factor_key = ("factor", query_key, species, element, charge, database)
+        factor_entry = None if query_cache is None else query_cache.get(factor_key)
+        if factor_entry is None:
+            factor_entry = atomic_scattering_factor_e(
+                species=species,
+                element=element,
+                charge=charge,
+                q_magnitude_Ainv=q_magnitude,
+                wavelength_A=wavelength_flat,
+            )
+            if query_cache is not None:
+                query_cache.retain(factor_key, factor_entry)
+        factor, mapping = factor_entry
         geometric_sum = _geometric_site_sum(
             q_vectors,
             q_magnitude,
@@ -231,15 +277,13 @@ def unit_cell_amplitude(
         )
         amplitude += factor * geometric_sum
         if inverted_amplitude is not None:
-            # G_species(-Q) = conj(G_species(Q)); anomalous f is NOT conjugated.
-            # The same identity holds for arbitrary real anisotropic site tensors
-            # and retained integer surface lifts, without centrosymmetry.
+            # Only the geometric sum conjugates; anomalous atomic factors do not.
             inverted_amplitude += factor * geometric_sum.conj()
         mappings.append(mapping)
 
     if inverse is not None:
         amplitude = np.where(
-            np.asarray(inverted)[:, None],
+            inverted[:, None],
             inverted_amplitude.reshape(-1, width)[inverse],
             amplitude.reshape(-1, width)[inverse],
         )
@@ -247,7 +291,7 @@ def unit_cell_amplitude(
         amplitude_e=amplitude.reshape(leading_shape),
         provenance=(
             f"XrayDB {xraydb.__version__}; "
-            f"database={xraydb.get_xraydb().get_version().split(',')[0].removeprefix('XrayDB Version: ')}; "
+            f"database={database[1].split(',')[0].removeprefix('XrayDB Version: ')}; "
             "f=f0+f1+i*f2; q=|Q|/(4*pi); "
             f"species={','.join(mappings)}"
             + (
@@ -269,6 +313,45 @@ def unit_cell_amplitude(
             )
         ),
     )
+
+
+def _prepare_amplitude_query(crystal, indices, wavelength):
+    """Exact basis/query geometry, independent of sites, occupations and ADPs."""
+    lattice = ReciprocalLattice.from_crystal(crystal)
+    flat_indices = indices.reshape(-1, 3)
+    wavelength_flat = wavelength.reshape(-1)
+    inverse = None
+    inverted, width = None, 0
+    if indices.ndim >= 3 and indices.shape[-2] >= 32:
+        # Native tables carry whole axial rows. Match opposite rows in linear
+        # work; sorting every query or looping over short rows costs more than
+        # the saved atomic sums. The long-row threshold brackets measured work.
+        width = indices.shape[-2]
+        rows = indices.reshape(-1, width, 3)
+        waves = wavelength.reshape(-1, width)
+        selected, lookup, inverted, row_by_key = [], [], [], {}
+        for i, (row, wave) in enumerate(zip(rows, waves, strict=True)):
+            partner = row_by_key.get((*(-row[0]), wave[0]))
+            reuse = (
+                partner is not None
+                and np.array_equal(row, -rows[selected[partner]])
+                and np.array_equal(wave, waves[selected[partner]])
+            )
+            if reuse:
+                lookup.append(partner)
+            else:
+                row_by_key[(*row[0], wave[0])] = len(selected)
+                lookup.append(len(selected))
+                selected.append(i)
+            inverted.append(reuse)
+        if len(selected) < len(rows):
+            flat_indices = rows[selected].reshape(-1, 3)
+            wavelength_flat = waves[selected].reshape(-1)
+            inverse = np.asarray(lookup)
+            inverted = np.asarray(inverted)
+    q_vectors = lattice.q_cartesian_Ainv(flat_indices).reshape(-1, 3)
+    q_magnitude = np.linalg.norm(q_vectors, axis=1)
+    return q_vectors, q_magnitude, wavelength_flat.copy(), inverse, inverted, width
 
 
 def ordered_event_result(

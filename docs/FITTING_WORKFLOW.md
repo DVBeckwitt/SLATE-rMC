@@ -951,3 +951,62 @@ The component archive precedes the final event-mass boundary checks; its tested
 amplitude/stacking owners match final bytes, while the detector archive includes
 and exercises those final checks. No scientific tolerance, background handling
 or fit-qualification state changed. Disposable checks stay outside the repository.
+
+
+### October 9 shared preparation and batch optimization
+
+All six follow-up mechanisms now use shared owners: occupied-column/parallel sparse
+projection, separate Gaussian/Lorentzian cone preparation, candidate-axis sparse
+contraction, prepared fixed background columns, atomic query/factor and exact
+strength-table caches, and admitted fixed-factor axial aggregation. The refinement
+CLI selects these automatically for compatible fixed-importance work. See
+[shared preparation](NATIVE_REFINEMENT.md#shared-preparation-and-candidate-batches)
+for direct APIs, invalidation, memory limits and recovery-group behavior.
+
+The paired reference was commit `338ba150396efb547cd30d746aa56da69551947e`.
+Complete nominal original, structural-probe and restored-start predictions and
+profiled counts passed the unchanged per-element 2e-12 relative plus 32 float64
+tiny allowance. Three fresh seven-coordinate probe batches had maximum contrast
+relative L2 disagreement 7.78e-12, below the frozen 2e-8 gate. Raw amplitude checks
+covered Bi2Se3, Bi2Te3, PbI2 2H/6H and changed site/basis/wavelength/layout inputs;
+additional checks exercised generic CIF and all six Pb surface endpoint motifs.
+
+All 160 final sparse projection blocks matched the parent CSR arrays bit for bit.
+The original paired projection measurement took 380.9623 seconds for the parent;
+a final same-input run with the stricter memory accounting took 161.0956 seconds
+in projection and 176.6285 seconds for complete response construction. All blocks
+admitted four workers under the 64 MiB concurrent workspace cap. The final timing
+is a separate run, not a simultaneous paired measurement; the earlier candidate
+timing is also retained in the evidence. No CSR support or probability changed.
+
+With geometry already prepared, three paired fresh seven-candidate batches took
+median 23.9181 seconds before and 6.8401 seconds after (3.50 times faster). Warm
+changed-candidate prediction took 0.7010 versus 0.4501 seconds. These figures include
+the relevant preparation reuse; they are not complete-fit timings. Isolating seven
+contractions with strengths and cones already prepared gave 0.5782 seconds for
+sequential direct evaluation, 0.4055 seconds for shared sparse traversal, and
+0.3312 seconds with admitted axial aggregation. The final aggregate retained
+128724188 bytes; 63 blocks aggregated, 33 declined for capacity and 64 offered no
+sparse reduction. Declined blocks preserved canonical event arithmetic.
+
+Five paired warm atomic-query evaluations had medians 5.8092 versus 1.5824 ms;
+fixed-background profiling had medians 12.1641 versus 5.4109 ms. Background columns,
+signed measurements, covariance/rank and normalized KKT checks were unchanged.
+Preparation ownership, invalidation, zero/tiny cache limits, extreme exponent
+admission, interleaved physical-part order and cross-block scratch release passed
+focused external checks. These are implementation checks, not background adequacy
+or numerical convergence of the fit.
+
+A small actual CUDA raster matched the prior CPU and CUDA implementations. CPU/GPU
+peak-relative error was 2.292e-16, within the existing 1e-11 GPU contract. An initial
+caller incorrectly applied the native-count per-element gate to tiny GPU raster
+tails; the failed record is retained alongside the parent comparison and correct
+pre-existing raster gate. No production tolerance changed. Region projection remains
+CPU-only; the raster selector remains automatic. No optimizer or full fit was run.
+
+The external `shared_preparation_optimization.ra_diag.npz` retains the numerical
+comparisons, timing records, failed caller records with repairs, exact temporary
+callers and final runtime sources (SHA256
+`3228cd8663c94b36b8e01eb0903c3519100d8b8a8645c6ba982695a539494916`).
+Temporary callers and generated build output
+were removed; no assessment harness was added to the repository.

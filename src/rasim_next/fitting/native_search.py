@@ -426,6 +426,8 @@ def fit_native_parameters(
         or background_problem.observation_count != len(observations.net_count)
     ):
         raise ValueError("background profiling requires single-exposure raw GLS without guards")
+    if isinstance(background_problem, NativeLinearBackgroundProblem):
+        background_problem = background_problem.prepare(observations)
     if predict_many is not None and not callable(predict_many):
         raise TypeError("predict_many must be callable")
     validate_native_search_request(
