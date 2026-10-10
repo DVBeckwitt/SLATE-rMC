@@ -21,17 +21,25 @@ void make_preview(App *a) {
         message(a, "Preview allocation failed; full-resolution display remains available.");
         return;
     }
-    for (r = 0; r < a->image.rows; ++r)
-        for (c = 0; c < a->image.columns; ++c)
-            a->preview[(size_t)(r / s) * a->preview_cols + c / s] += (float)pixel(a, c, r);
     for (r = 0; r < a->preview_rows; ++r)
         for (c = 0; c < a->preview_cols; ++c) {
             int nr = a->image.rows - r * s, nc = a->image.columns - c * s;
+            int dr, dc;
+            float sum = 0;
+            const int *dark = a->subtract ? a->image.dark_counts : NULL;
             if (nr > s)
                 nr = s;
             if (nc > s)
                 nc = s;
-            a->preview[(size_t)r * a->preview_cols + c] /= (float)(nr * nc);
+            /* Preserve row-major addition within each block, including signed counts. */
+            for (dr = 0; dr < nr; ++dr) {
+                size_t start = (size_t)(r * s + dr) * a->image.columns + c * s;
+                for (dc = 0; dc < nc; ++dc) {
+                    size_t i = start + dc;
+                    sum += (float)(a->image.counts[i] - (dark ? dark[i] : 0));
+                }
+            }
+            a->preview[(size_t)r * a->preview_cols + c] = sum / (float)(nr * nc);
         }
     a->view_dirty = 1;
 }
@@ -230,14 +238,14 @@ static void paint_canvas(App *a, HDC dc, RECT bounds) {
             }
         SelectObject(dc, old);
         DeleteObject(pen);
+        HBRUSH brush = CreateSolidBrush(RGB(255, 100, 70));
         for (i = 0; i < a->result.point_count; ++i) {
             int x = (int)((a->result.points[i].column - a->left) * a->zoom),
                 y = (int)((a->result.points[i].row - a->top) * a->zoom);
             RECT dot = {x - 2, y - 2, x + 3, y + 3};
-            HBRUSH brush = CreateSolidBrush(RGB(255, 100, 70));
             FillRect(dc, &dot, brush);
-            DeleteObject(brush);
         }
+        DeleteObject(brush);
     }
     {
         int x = (int)((a->selected_column - a->left) * a->zoom),
@@ -335,13 +343,20 @@ LRESULT CALLBACK canvas_proc(HWND w, UINT message_id, WPARAM wp, LPARAM lp) {
         EndPaint(w, &ps);
         return 0;
     }
-    case WM_SIZE:
+    case WM_SIZE: {
+        int old_width = a->view_width, old_height = a->view_height;
         a->view_width = LOWORD(lp);
         a->view_height = HIWORD(lp) > 140 ? HIWORD(lp) - 140 : 1;
         if (a->zoom <= 0)
             fit_view(a);
+        else {
+            /* Keep the same native detector point at the viewport center. */
+            a->left += (old_width - a->view_width) / (2 * a->zoom);
+            a->top += (old_height - a->view_height) / (2 * a->zoom);
+        }
         a->view_dirty = 1;
         return 0;
+    }
     case WM_LBUTTONDOWN: {
         int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp), c, r;
         if (a->worker || !view_coordinate(a, x, y, &c, &r))

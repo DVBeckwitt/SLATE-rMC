@@ -17,6 +17,11 @@ For the measured lessons, background decisions and current manuscript figures wi
 read [Fitting workflow and figures](docs/FITTING_WORKFLOW.md).
 Add no parallel fitting or physics pipeline.
 
+The [computational manual](docs/manual/README.md) records crystallite orientation,
+Ewald selection and detector integration, including the derivations transferred
+from the manuscript supplement. The manuscript uses the two-angle reciprocal-vector
+description.
+
 ## Quick start
 
 For the standalone Windows XP OSC viewer, hBN detector calibrator and angular integrator, see

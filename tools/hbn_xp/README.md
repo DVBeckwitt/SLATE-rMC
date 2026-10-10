@@ -20,6 +20,24 @@ specific to the supplied calibrant at its measured position.
 The demo folder also contains PbI2, Bi2Se3 and Bi2Te3 CIFs from the repository.
 These are separate material references, not models of the supplied hBN image.
 
+The application is already native C11/C++17. Version 6 reduces repeated work without
+changing precision: strip-based OSC decoding, block-local previews, Gaussian weights
+reused within each calibration, and fewer polygon copies/clips during integration.
+Additional OSC staging memory is 186 kB for a 3000-column file (at most 1 MiB total).
+No additional runtime or hardware requirement is introduced.
+
+On the development computer, median times from three runs of 32-bit builds with
+identical compiler settings and supplied hBN/dark files changed from 142 to 97 ms
+for both OSC loads, 21 to 7 ms
+for a dark-subtracted preview, 233 to 200 ms for calibration, and 4.80 to 3.41 seconds
+for an 800 by 360 angular integration. These are component timings with warm file
+cache on modern Windows, not predicted XP times. Complete decoded pixels, previews,
+fit observations/results, angular signal/area/panel arrays and count-accounting
+totals matched version 5 bit for bit. Focused checks also cover endian/strip edges,
+signed partial preview blocks, reflected profile filters, beam-center and phi-wrap
+boundaries, cropping, masking, cancellation and malformed file rejection. They
+establish implementation equivalence, not a new physical calibration validation.
+
 ## Viewing
 
 1. Choose **Open OSC**. The input must be an uncompressed R-AXIS `.osc`; decompress
@@ -36,6 +54,13 @@ These are separate material references, not models of the supplied hBN image.
 5. **Open dark** requires exactly matching dimensions. **Show raw - dark** subtracts
    it at scale one for display, measurements and numeric exports; there is no exposure
    normalization. Negative values remain signed. Clear dark is in the File menu.
+
+The pressed Analysis/hBN/CIF button identifies the current page. The default view
+is a single detector image. Switching pages or views and resizing the window
+preserve zoom and the native point at the viewport center; **Fit image** explicitly
+resets the view. Black/white, Auto contrast, Apply levels, Fit image and Zoom affect
+the detector only and are disabled in angular-only view. Log display applies to both
+images; the angular map automatically scales to its current finite bin values.
 
 Coordinates are SLATE detector-native: clockwise from raw OSC exactly once on import,
 column increases right, row down, and integer coordinates are zero-based pixel centers.
@@ -153,17 +178,21 @@ The integrator streams two rows of corner coordinates and keeps three double arr
 for bins. The default 800 by 360 grid adds about 6.6 MiB, plus about 1.1 MiB for a
 3000 by 3000 mask when used. Moving the cursor computes only its coordinate transform.
 Integration runs on demand; slower XP hardware remains responsive to Cancel.
+Angular profile display values are cached until the integration or output mode
+changes, adding 9,280 bytes for the default grid. Selection and guide redraws reuse
+them without repeating the grid reductions. Numeric exports retain their original
+signed reductions and precision.
 
 ## CIF reference beside the image
 
 1. Choose **CIF** and **Load CIF**. Enter the measurement wavelength in angstroms
-   and the maximum 2theta in degrees. **Geometry A** copies the applied analysis
+   and the maximum 2theta in degrees. **Use geometry wavelength** copies the applied analysis
    wavelength; click **Calculate** after changing inputs. The CIF's own wavelength
    is not substituted for the measurement wavelength. A CIF can be calculated
    before opening an OSC.
 2. **Guides > Powder 2theta arcs** draws every distinct Bragg angle along phi.
    **Arcs + Qz rods / L ticks** adds orange constant-Qr rods and yellow HKL ticks.
-   Set **Inc deg** (sample incidence) and **N phi deg** (transverse sample-normal
+   Set **Incidence deg** (sample incidence) and **Normal phi deg** (transverse sample-normal
    direction), then **Apply a1/a2 fiber**. This explicitly declares that direct
    a1/a2 lie in the sample surface, b3 is the texture normal, and crystallites may
    rotate through the full fiber azimuth. Positive incidence means the beam enters
@@ -184,6 +213,12 @@ Integration runs on demand; slower XP hardware remains responsive to Cancel.
    signed HKL, 2theta and individual raw |F|^2 in electrons squared. The upper
    table's **max |F|^2** is the largest individual member, not a sum. **By strength**
    sorts these maxima; **By position** restores angle order (Qr order for rods).
+   Sorting preserves the selected group and scrolls it into view. **More rows**
+   collapses the setup fields to enlarge both tables; **Show setup** restores them.
+   View choice and calculation status remain visible. Hover over a table row for
+   the full label and more precise values. The CIF inspector uses a wider sidebar
+   so signed HKLs and intensities fit without horizontal scrolling at normal XP
+   font size. For the largest image, use a single view rather than Side by side.
    R labels use literal `L` because that line spans continuous L; R membership
    includes different L values along the same rod. P and T groups differ: equal
    powder angle does not imply equal Qr,Qz. Systematic extinctions and Friedel

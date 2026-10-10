@@ -60,3 +60,31 @@ request. Only the local `main` branch remains; protected detached checkouts are 
 branches and retain recovery material. The prior branch-preservation exception is
 retired. Current fitting, background, qualification and figure conventions remain
 in their authoritative documents, and native desktop fitting limitations remain explicit.
+
+
+## October 9, 2026 consolidation
+
+The completed shared cone/structure/response optimizations (`400286e`, `32d1213`)
+and XP navigation/loading/calibration/integration changes (`93443b5`, `2d03004`)
+are consolidated with the transferred computational manual. Their existing
+numerical and software evidence remains authoritative for its stated scope;
+cleanup adds no fit or numerical-qualification claim. Runtime source bytes are
+checked against the accepted numerical and XP commits before main adoption.
+
+The clean guidance, GPU, fitting and XP checkouts can now be retired. The GPU
+checkout at `96785af` is historical: main already contains its exact CUDA terminal
+and the later automatic execution selector. Reapplying that older commit would
+replace newer behavior. Original histories for all five registered checkouts
+(including main) are retained in the verified external bundle
+`slate_registered_worktrees_before_cleanup_20261009.bundle` (SHA256
+`47f2a259bd296d8098eee12c42b6dacd7ffcaacef8243de269cc85aeb1f19a35`).
+The six pending README/manual files were also preserved byte-for-byte in
+`cleanup_manual_preservation.ra_diag.npz` before consolidation. Both archives live
+in `C:/Users/Kenpo/.codex/visualizations/2026/10/09/01a11e7a-43d2-7b23-a889-d369a898d3a1/`.
+
+Generated lint and Python bytecode caches are disposable; the active virtual
+environment, reference evidence and live tools/examples remain. The ignored
+`build/worktrees` path is an unregistered Nextcloud placeholder whose contents
+cannot currently be enumerated because the cloud provider is stopped. Its
+recovery coverage is unverified, so cleanup preserves it without claiming that
+the October 8 archive covers it. Inspect and preserve that data before removal.

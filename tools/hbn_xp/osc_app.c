@@ -194,6 +194,8 @@ static void lock_controls(App *a, int busy) {
         child = GetWindow(child, GW_HWNDNEXT);
     }
     EnableWindow(GetDlgItem(a->window, CANCEL_JOB), busy);
+    if (!busy)
+        analysis_view_controls(a);
     for (i = OPEN; i <= EXIT_APP; ++i)
         EnableMenuItem(menu, i, MF_BYCOMMAND | (busy ? MF_GRAYED : MF_ENABLED));
     EnableMenuItem(menu, SAVE_GEOMETRY, MF_BYCOMMAND | (busy ? MF_GRAYED : MF_ENABLED));
@@ -676,6 +678,8 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR command, int sh
     free(app.screen_bgr);
     free(app.mask);
     free(app.angle_bgr);
+    free(app.angle_profiles[0]);
+    free(app.angle_profiles[1]);
     osc_integration_free(&app.integration);
     osc_integration_free(&app.pending_integration);
     cif_peaks_free(&app.cif);

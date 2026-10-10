@@ -91,12 +91,15 @@ typedef struct {
     unsigned char *mask;
     unsigned char *angle_bgr;
     int angle_bitmap_width, angle_bitmap_height, angle_color_dirty;
+    double *angle_profiles[2];
+    int angle_profile_mode[2];
     char calibration_text[160];
     CifPeaks cif, pending_cif;
     int cif_loaded, cif_selected, cif_dirty, cif_unknown_zero, updating_cif;
     double cif_wavelength, cif_maximum;
     char cif_path[MAX_PATH], cif_data_path[MAX_PATH];
     int cif_kind, cif_labels, cif_overlay, cif_mount_applied, cif_mount_dirty, cif_sort_intensity;
+    int cif_compact;
     int guide_attempted, guide_rods;
     CifMount cif_mount;
     CifGuides guides;
@@ -153,6 +156,7 @@ enum {
     CIF_MOUNT,
     CIF_KIND,
     CIF_MEMBERS,
+    CIF_COMPACT,
     CIF_LABEL = 640,
     CIF_END = 650
 };
@@ -185,6 +189,7 @@ void show_result(App *a);
 void analysis_controls(App *a);
 void analysis_page(App *a, int analysis);
 void analysis_layout(App *a);
+void analysis_view_controls(App *a);
 int analysis_command(App *a, int id, int notification);
 void analysis_invalidate(App *a);
 int analysis_ready(const App *a);

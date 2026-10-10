@@ -5,7 +5,12 @@ int analysis_ready(const App *a) {
            a->image.rows == a->geometry.rows && a->image.columns == a->geometry.columns;
 }
 void analysis_invalidate(App *a) {
+    int i;
     osc_integration_free(&a->integration);
+    for (i = 0; i < 2; ++i) {
+        free(a->angle_profiles[i]);
+        a->angle_profiles[i] = NULL;
+    }
     a->angle_color_dirty = 1;
     if (a->analysis_page == PAGE_ANALYSIS && a->result_label)
         SetWindowTextA(a->result_label, "Analysis inputs changed. Click Integrate to recompute.");
@@ -22,13 +27,21 @@ static void geometry_status(App *a) {
                                             : a->calibration_text;
     SetWindowTextA(GetDlgItem(a->window, APPLIED_GEOMETRY), text);
 }
+void analysis_view_controls(App *a) {
+    const int ids[] = {BLACK, WHITE, AUTO_CONTRAST, APPLY_CONTRAST, FIT_VIEW, ZOOM_IN, ZOOM_OUT};
+    size_t i;
+    int visible = a->analysis_page == PAGE_HBN || a->view_mode != VIEW_ANGLES;
+    for (i = 0; i < sizeof ids / sizeof ids[0]; ++i)
+        EnableWindow(GetDlgItem(a->window, ids[i]), visible && !a->worker);
+}
 void analysis_layout(App *a) {
     RECT r;
-    int w, h, mode = a->analysis_page ? a->view_mode : VIEW_DETECTOR;
+    int w, h, x = a->analysis_page == PAGE_CIF ? 340 : 250;
+    int mode = a->analysis_page ? a->view_mode : VIEW_DETECTOR;
     if (!a->canvas || !a->angle_canvas)
         return;
     GetClientRect(a->window, &r);
-    w = r.right - 260;
+    w = r.right - x - 10;
     h = r.bottom - 40;
     if (w < 2)
         w = 2;
@@ -36,17 +49,17 @@ void analysis_layout(App *a) {
         h = 2;
     ShowWindow(a->canvas, mode == VIEW_ANGLES ? SW_HIDE : SW_SHOW);
     ShowWindow(a->angle_canvas, mode == VIEW_DETECTOR ? SW_HIDE : SW_SHOW);
-    MoveWindow(a->canvas, 250, 8, mode == VIEW_SPLIT ? w / 2 : w, h, TRUE);
-    MoveWindow(a->angle_canvas, mode == VIEW_SPLIT ? 254 + w / 2 : 250, 8,
+    MoveWindow(a->canvas, x, 8, mode == VIEW_SPLIT ? w / 2 : w, h, TRUE);
+    MoveWindow(a->angle_canvas, mode == VIEW_SPLIT ? x + 4 + w / 2 : x, 8,
                mode == VIEW_SPLIT ? w - w / 2 - 4 : w, h, TRUE);
     MoveWindow(a->stage_label, 10, r.bottom - 26, r.right - 20, 22, TRUE);
     MoveWindow(a->result_label, 10, 530, 230, r.bottom > 570 ? r.bottom - 570 : 1, TRUE);
     a->angle_color_dirty = 1;
     cif_layout(a);
+    analysis_view_controls(a);
 }
 void analysis_page(App *a, int enabled) {
     HWND child = GetWindow(a->window, GW_CHILD);
-    int changed = a->analysis_page != enabled;
     if (GetCapture() == a->canvas || GetCapture() == a->angle_canvas)
         ReleaseCapture();
     a->analysis_page = enabled;
@@ -64,11 +77,14 @@ void analysis_page(App *a, int enabled) {
         child = GetWindow(child, GW_HWNDNEXT);
     }
     analysis_layout(a);
-    if (changed)
-        fit_view(a);
+    CheckDlgButton(a->window, ANALYSIS_PAGE,
+                   enabled == PAGE_ANALYSIS ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(a->window, CALIBRATION_PAGE, enabled == PAGE_HBN ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(a->window, CIF_PAGE, enabled == PAGE_CIF ? BST_CHECKED : BST_UNCHECKED);
     geometry_status(a);
     ShowWindow(a->result_label, enabled == PAGE_CIF ? SW_HIDE : SW_SHOW);
     SendMessageA(GetDlgItem(a->window, CIF_VIEW), CB_SETCURSEL, a->view_mode, 0);
+    SendMessageA(GetDlgItem(a->window, VIEW_MODE), CB_SETCURSEL, a->view_mode, 0);
     cif_status(a);
     if (enabled == PAGE_CIF)
         return;
@@ -101,8 +117,10 @@ void analysis_controls(App *a) {
     int i;
     const char *labels[] = {"Sample mm", "2theta deg", "Phi deg",       "Bin width deg",
                             "View",      "Mouse tool", "Map / profiles"};
-    control(a, "BUTTON", "Analysis", WS_TABSTOP, ANALYSIS_PAGE, 10, 174, 64, 26);
-    control(a, "BUTTON", "hBN", WS_TABSTOP, CALIBRATION_PAGE, 80, 174, 40, 26);
+    control(a, "BUTTON", "Analysis", WS_TABSTOP | BS_PUSHLIKE | BS_CHECKBOX, ANALYSIS_PAGE, 10, 174,
+            64, 26);
+    control(a, "BUTTON", "hBN", WS_TABSTOP | BS_PUSHLIKE | BS_CHECKBOX, CALIBRATION_PAGE, 80, 174,
+            40, 26);
     control(a, "STATIC", "Apply geometry to enable angles.", 0, APPLIED_GEOMETRY, 10, 204, 230, 20);
     control(a, "BUTTON", "Apply inputs", WS_TABSTOP, APPLY_INPUTS, 10, 226, 108, 25);
     control(a, "BUTTON", "Use hBN fit", WS_TABSTOP, APPLY_HBN, 124, 226, 116, 25);
@@ -116,7 +134,7 @@ void analysis_controls(App *a) {
     control(a, "EDIT", "180", WS_TABSTOP | ES_AUTOHSCROLL, PHI_MAX, 170, 314, 70, 24);
     control(a, "EDIT", "0.1", WS_TABSTOP | ES_AUTOHSCROLL, THETA_STEP, 92, 344, 69, 24);
     control(a, "EDIT", "1", WS_TABSTOP | ES_AUTOHSCROLL, PHI_STEP, 170, 344, 70, 24);
-    combo(a, VIEW_MODE, 374, "Detector\0Phi vs 2theta\0Side by side\0\0", VIEW_SPLIT);
+    combo(a, VIEW_MODE, 374, "Detector\0Phi vs 2theta\0Side by side\0\0", VIEW_DETECTOR);
     combo(a, MOUSE_TOOL, 404, "Inspect / pan\0Angular sector\0Mask rectangle\0Unmask rectangle\0\0",
           TOOL_PAN);
     combo(a, OUTPUT_MODE, 434, "Mean counts\0Total counts\0Valid pixel area\0\0", OUTPUT_MEAN);
@@ -125,7 +143,7 @@ void analysis_controls(App *a) {
     control(a, "BUTTON", "Export angles...", WS_TABSTOP, EXPORT_ANGLES, 10, 499, 110, 25);
     control(a, "BUTTON", "Clear mask", WS_TABSTOP, CLEAR_MASK, 128, 499, 112, 25);
     a->selection = (OscGrid){0, 80 * HBN_PI / 180, -HBN_PI, HBN_PI, 800, 360};
-    a->view_mode = VIEW_SPLIT;
+    a->view_mode = VIEW_DETECTOR;
     a->angle_canvas = CreateWindowExA(WS_EX_CLIENTEDGE, "SlateAngleCanvas", "",
                                       WS_CHILD | WS_VISIBLE | WS_TABSTOP, 250, 8, 730, 672,
                                       a->window, NULL, a->instance, a);
@@ -269,7 +287,6 @@ int analysis_command(App *a, int id, int notification) {
                 ReleaseCapture();
             a->view_mode = (int)SendDlgItemMessageA(a->window, id, CB_GETCURSEL, 0, 0);
             analysis_layout(a);
-            fit_view(a);
         }
         return 1;
     case MOUSE_TOOL:
