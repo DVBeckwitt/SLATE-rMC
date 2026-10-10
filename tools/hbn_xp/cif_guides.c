@@ -7,14 +7,10 @@
 #define GUIDE_POINTS 250000
 #define GUIDE_PATHS 20000
 
-int cif_mount_valid(CifMount m) {
-    return isfinite(m.incidence) && fabs(m.incidence) < 89 * HBN_PI / 180 &&
-           isfinite(m.normal_phi) && fabs(m.normal_phi) <= HBN_PI;
-}
-int cif_rod_angles(double wavelength, CifMount m, double rho, double z, OscAngle angles[2]) {
+int cif_rod_angles(double wavelength, OscMount m, double rho, double z, OscAngle angles[2]) {
     double k, s, c, x, y2, tolerance, transverse, along, up, side;
     int branch, count;
-    if (!cif_mount_valid(m) || !isfinite(wavelength) || wavelength <= 0 || !isfinite(rho) ||
+    if (!osc_mount_valid(m) || !isfinite(wavelength) || wavelength <= 0 || !isfinite(rho) ||
         rho < 0 || !isfinite(z))
         return 0;
     k = 2 * HBN_PI / wavelength;
@@ -54,7 +50,7 @@ void cif_guides_free(CifGuides *g) {
 typedef struct {
     const OscGeometry *geometry;
     const CifGuideView *view;
-    CifMount mount;
+    OscMount mount;
     CifGuides cache;
     int point_capacity, path_capacity, kind, branch;
     double theta, rho, low, high;
@@ -171,12 +167,12 @@ static int curve(Builder *b, int kind, int group) {
         b->cache.point_count - b->cache.paths[b->cache.path_count - 1].first;
     return 1;
 }
-int cif_guides_build(const CifPeaks *peaks, const OscGeometry *geometry, CifMount mount, int rods,
+int cif_guides_build(const CifPeaks *peaks, const OscGeometry *geometry, OscMount mount, int rods,
                      const CifGuideView *view, CifGuides *output, char error[256]) {
     Builder b = {0};
     double k = 2 * HBN_PI / peaks->wavelength_A;
     int kind, group;
-    if ((rods && !cif_mount_valid(mount)) ||
+    if ((rods && !osc_mount_valid(mount)) ||
         fabs(peaks->wavelength_A - geometry->settings.wavelength_A) > 1e-10 * peaks->wavelength_A) {
         strcpy(error,
                "Check wavelength and fiber mounting: |incidence| < 89, normal phi in +/-180 deg.");

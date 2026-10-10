@@ -21,7 +21,7 @@ $common = @(
     '-msse2', '-mfpmath=sse', '-ffp-contract=off'
 )
 $objects = @()
-foreach ($source in @('hbn_core', 'hbn_io', 'osc_app', 'osc_view', 'osc_output', 'osc_analysis', 'osc_analysis_io', 'osc_analysis_ui', 'osc_angle_view', 'osc_cif_ui', 'osc_cif_overlay', 'cif_guides')) {
+foreach ($source in @('hbn_core', 'hbn_io', 'osc_app', 'osc_view', 'osc_output', 'osc_analysis', 'osc_analysis_io', 'osc_profile', 'osc_profile_ui', 'osc_analysis_ui', 'osc_angle_view', 'osc_cif_ui', 'osc_cif_overlay', 'cif_guides')) {
     $object = Join-Path $destination ($source + '.o')
     & $compiler @common '-std=c11' '-c' (Join-Path $PSScriptRoot ($source + '.c')) '-o' $object
     if ($LASTEXITCODE -ne 0) { throw "C compilation failed: $source" }

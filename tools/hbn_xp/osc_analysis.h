@@ -14,6 +14,15 @@ typedef struct {
     double theta, phi;
     int azimuth_valid;
 } OscAngle;
+
+/* External-air sample normal: incidence positive into the surface, normal_phi
+   in the same scattering-azimuth convention as OscAngle. Angles are radians. */
+typedef struct {
+    double incidence, normal_phi;
+} OscMount;
+int osc_mount_valid(OscMount mount);
+void osc_angle_q(double wavelength_A, OscMount mount, double two_theta, double phi, double *qr_invA,
+                 double *qz_invA);
 typedef struct {
     double theta_min, theta_max, phi_min, phi_max;
     int theta_bins, phi_bins;

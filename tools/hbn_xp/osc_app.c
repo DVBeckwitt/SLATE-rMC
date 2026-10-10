@@ -194,6 +194,8 @@ static void lock_controls(App *a, int busy) {
         child = GetWindow(child, GW_HWNDNEXT);
     }
     EnableWindow(GetDlgItem(a->window, CANCEL_JOB), busy);
+    if (a->profile_window)
+        EnableWindow(a->profile_window, !busy);
     if (!busy)
         analysis_view_controls(a);
     for (i = OPEN; i <= EXIT_APP; ++i)
@@ -558,6 +560,7 @@ static LRESULT CALLBACK window_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
                 a->integration = a->pending_integration;
                 memset(&a->pending_integration, 0, sizeof a->pending_integration);
                 analysis_publish(a);
+                profile_show(a);
             }
             SetWindowTextA(
                 a->stage_label,
@@ -652,6 +655,10 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR command, int sh
     wc.lpszClassName = "SlateAngleCanvas";
     if (!RegisterClassExA(&wc))
         return 2;
+    wc.lpfnWndProc = profile_window_proc;
+    wc.lpszClassName = "SlateRegionProfile";
+    if (!RegisterClassExA(&wc))
+        return 2;
     wc.lpfnWndProc = window_proc;
     wc.lpszClassName = "SlateOscMain";
     if (!RegisterClassExA(&wc))
@@ -665,7 +672,8 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR command, int sh
     if (__argc == 2)
         start_job(&app, JOB_LOAD, __argv[1]);
     while (GetMessageA(&msg, NULL, 0, 0) > 0) {
-        if (!TranslateAcceleratorA(app.window, accel, &msg) &&
+        if (!(app.profile_window && IsDialogMessageA(app.profile_window, &msg)) &&
+            !TranslateAcceleratorA(app.window, accel, &msg) &&
             !IsDialogMessageA(app.window, &msg)) {
             TranslateMessage(&msg);
             DispatchMessageA(&msg);
@@ -682,6 +690,7 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR command, int sh
     free(app.angle_profiles[1]);
     osc_integration_free(&app.integration);
     osc_integration_free(&app.pending_integration);
+    osc_profile_free(&app.profile);
     cif_peaks_free(&app.cif);
     cif_peaks_free(&app.pending_cif);
     cif_guides_free(&app.guides);

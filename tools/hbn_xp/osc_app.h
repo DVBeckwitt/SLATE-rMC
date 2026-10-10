@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <windowsx.h>
 #include "osc_analysis.h"
+#include "osc_profile.h"
 #include "cif_peaks.h"
 #include "cif_guides.h"
 #include <commdlg.h>
@@ -93,6 +94,10 @@ typedef struct {
     int angle_bitmap_width, angle_bitmap_height, angle_color_dirty;
     double *angle_profiles[2];
     int angle_profile_mode[2];
+    HWND profile_window;
+    OscProfile profile;
+    int profile_axis, profile_mode, profile_q_bins, profile_bins_dirty, profile_updating;
+    char profile_error[256];
     char calibration_text[160];
     CifPeaks cif, pending_cif;
     int cif_loaded, cif_selected, cif_dirty, cif_unknown_zero, updating_cif;
@@ -101,7 +106,7 @@ typedef struct {
     int cif_kind, cif_labels, cif_overlay, cif_mount_applied, cif_mount_dirty, cif_sort_intensity;
     int cif_compact;
     int guide_attempted, guide_rods;
-    CifMount cif_mount;
+    OscMount cif_mount;
     CifGuides guides;
     OscGeometry guide_geometry;
     CifGuideView guide_view;
@@ -133,6 +138,7 @@ enum {
     SAVE_GEOMETRY,
     LOAD_GEOMETRY,
     CLEAR_MASK,
+    PLOT_REGION,
     ANALYSIS_LABEL = 350,
     HBN_LABEL = 500
 };
@@ -163,6 +169,12 @@ enum {
 enum { VIEW_DETECTOR, VIEW_ANGLES, VIEW_SPLIT };
 enum { TOOL_PAN, TOOL_SECTOR, TOOL_MASK, TOOL_UNMASK };
 enum { OUTPUT_MEAN, OUTPUT_SUM, OUTPUT_AREA };
+
+void profile_show(App *a);
+void profile_invalidate(App *a);
+void profile_mount_changed(App *a);
+void analysis_mount_apply(App *a, OscMount mount);
+LRESULT CALLBACK profile_window_proc(HWND window, UINT message, WPARAM wp, LPARAM lp);
 int pixel(const App *a, int c, int r);
 int app_progress(void *context, const char *stage);
 void message(App *a, const char *text);

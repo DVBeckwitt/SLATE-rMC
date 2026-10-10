@@ -183,6 +183,53 @@ changes, adding 9,280 bytes for the default grid. Selection and guide redraws re
 them without repeating the grid reductions. Numeric exports retain their original
 signed reductions and precision.
 
+## Plot an integrated region as a 1D line
+
+After **Integrate** completes, a separate resizable plot window opens. Choose
+**Plot intensity vs**: **2theta**, **phi**, **Qz**, or **Qr**. The chosen axis is
+remembered for the next region. Close this window to continue selecting regions;
+**Analysis > Plot region as 1D...** reopens the current result. The existing map
+and its two small angular profiles remain available.
+
+The plot has its own **Mean counts / Total counts / Valid pixel area** selector.
+Changing it reuses the same accumulated signal and area. Lines break at bins with
+no valid support; negative counts remain negative. Hover over the line area for
+bin-center coordinates, signed signal, valid area and the plotted value.
+**Export profile...** saves this one profile as CSV with bin edges/centers, S, N, P,
+mean, valid fraction, applied geometry, region grid, source/dark/mask fingerprints
+and the chosen plotted column. Existing **Export angles...** still exports the map.
+
+For **Qz/Qr**, enter sample **Incidence deg** and **Normal phi deg**, choose
+**Q bins** (1..4096) and click **Apply**. A CIF is not required. These are the same
+applied orientation and draft inputs used by the CIF rod guides; changing either
+place updates the other. Positive incidence enters the sample surface. Normal phi
+uses scattering azimuth: zero up and +90 left in the untilted detector view.
+Applying orientation here does not change the CIF overlay choice.
+
+Qz is signed along the sample normal; Qr is the nonnegative in-plane magnitude.
+Both are external-air momentum transfer in inverse angstroms using the applied
+analysis wavelength. They do not include refraction and are not crystallographic L.
+With T=2theta, D=phi-normal_phi, k=2*pi/wavelength and A=2*sin(T/2)^2:
+`Qz=k*(sin(incidence)*A+cos(incidence)*sin(T)*cos(D))`;
+`Qr=k*hypot(-cos(incidence)*A+sin(incidence)*sin(T)*cos(D), sin(T)*sin(D))`.
+
+Angular profiles are exact marginal reductions of the stored angular map. Q profiles
+are explicitly approximate: each angular cell's entire S, N and P is reassigned
+using its center coordinate. The range includes every panel-supported cell, even
+fully masked cells, and the final edge is inclusive. Totals are conserved apart from
+floating-point summation; no Q-width division or coordinate Jacobian is introduced.
+Finer Q bins cannot recover information lost within an angular cell. Reduce the
+source angular bin widths and reintegrate to assess this approximation, especially
+for narrow peaks. A constant-coordinate range receives a small display interval;
+requests whose distinct bin edges cannot be represented are rejected explicitly.
+Changing geometry, region, dark or mask invalidates the profile; changing sample
+orientation invalidates Q profiles while angular profiles remain usable.
+
+Profile construction is synchronous and bounded by the existing angular grid.
+It precomputes trigonometry along the two grid axes, with up to about 87 KiB of
+temporary storage and 96 KiB for the selected profile. Redrawing or changing the
+y-value choice does not revisit the angular map.
+
 ## CIF reference beside the image
 
 1. Choose **CIF** and **Load CIF**. Enter the measurement wavelength in angstroms
@@ -341,7 +388,7 @@ Exit codes: 0 qualified result saved, 3 unqualified result saved, 2 input/calcul
 output failure. Batch explicitly replaces the requested CSV. No file is written on
 calculation failure. Passing a single OSC filename instead opens it in the viewer.
 
-Reciprocal-space rebinning, intensity corrections and background fitting are outside
+Reciprocal-space images, intensity corrections and background fitting are outside
 this version.
 
 ## Build on a modern development computer

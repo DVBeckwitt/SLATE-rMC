@@ -6,6 +6,7 @@ int analysis_ready(const App *a) {
 }
 void analysis_invalidate(App *a) {
     int i;
+    profile_invalidate(a);
     osc_integration_free(&a->integration);
     for (i = 0; i < 2; ++i) {
         free(a->angle_profiles[i]);
@@ -53,7 +54,11 @@ void analysis_layout(App *a) {
     MoveWindow(a->angle_canvas, mode == VIEW_SPLIT ? x + 4 + w / 2 : x, 8,
                mode == VIEW_SPLIT ? w - w / 2 - 4 : w, h, TRUE);
     MoveWindow(a->stage_label, 10, r.bottom - 26, r.right - 20, 22, TRUE);
-    MoveWindow(a->result_label, 10, 530, 230, r.bottom > 570 ? r.bottom - 570 : 1, TRUE);
+    {
+        int top = a->analysis_page == PAGE_ANALYSIS ? 560 : 530;
+        MoveWindow(a->result_label, 10, top, 230, r.bottom > top + 40 ? r.bottom - top - 40 : 1,
+                   TRUE);
+    }
     a->angle_color_dirty = 1;
     cif_layout(a);
     analysis_view_controls(a);
@@ -142,6 +147,7 @@ void analysis_controls(App *a) {
     control(a, "BUTTON", "Full range", WS_TABSTOP, FULL_ANGLES, 128, 465, 112, 27);
     control(a, "BUTTON", "Export angles...", WS_TABSTOP, EXPORT_ANGLES, 10, 499, 110, 25);
     control(a, "BUTTON", "Clear mask", WS_TABSTOP, CLEAR_MASK, 128, 499, 112, 25);
+    control(a, "BUTTON", "Plot region as 1D...", WS_TABSTOP, PLOT_REGION, 10, 530, 230, 25);
     a->selection = (OscGrid){0, 80 * HBN_PI / 180, -HBN_PI, HBN_PI, 800, 360};
     a->view_mode = VIEW_DETECTOR;
     a->angle_canvas = CreateWindowExA(WS_EX_CLIENTEDGE, "SlateAngleCanvas", "",
@@ -354,6 +360,9 @@ int analysis_command(App *a, int id, int notification) {
     }
     case INTEGRATE:
         analysis_begin(a);
+        return 1;
+    case PLOT_REGION:
+        profile_show(a);
         return 1;
     case FULL_ANGLES:
         a->selection = (OscGrid){0, 80 * HBN_PI / 180, -HBN_PI, HBN_PI, 800, 360};

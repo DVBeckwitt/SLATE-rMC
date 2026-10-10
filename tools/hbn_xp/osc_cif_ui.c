@@ -256,8 +256,9 @@ int cif_command(App *a, int id, int notification) {
         a->cif_dirty = a->cif_loaded;
     } else if ((id == CIF_INCIDENCE || id == CIF_NORMAL_PHI) && notification == EN_CHANGE) {
         a->cif_mount_dirty = 1;
+        profile_mount_changed(a);
     } else if (id == CIF_MOUNT) {
-        CifMount mount;
+        OscMount mount;
         if (!number(a, CIF_INCIDENCE, &mount.incidence) ||
             !number(a, CIF_NORMAL_PHI, &mount.normal_phi)) {
             message(a, "Enter finite incidence and normal phi in degrees.");
@@ -265,17 +266,13 @@ int cif_command(App *a, int id, int notification) {
         }
         mount.incidence *= HBN_PI / 180;
         mount.normal_phi *= HBN_PI / 180;
-        if (!cif_mount_valid(mount)) {
+        if (!osc_mount_valid(mount)) {
             message(a, "Use |incidence| < 89 deg and normal phi in [-180,180] deg. Positive "
                        "incidence means the beam enters the a1/a2 surface. Normal phi is its "
                        "transverse direction (0 up, +90 left). Air geometry; no refraction.");
             return 1;
         }
-        a->cif_mount = mount;
-        a->cif_mount_applied = 1;
-        a->cif_mount_dirty = 0;
-        a->guide_attempted = 0;
-        a->guide_error[0] = 0;
+        analysis_mount_apply(a, mount);
         a->cif_overlay = 2;
         SendMessageA(GetDlgItem(a->window, CIF_OVERLAY), CB_SETCURSEL, 2, 0);
     } else if (id == CIF_OPEN) {
