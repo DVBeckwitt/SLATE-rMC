@@ -268,20 +268,68 @@ class NativeFixedResponse:
     blocks: tuple[tuple[FiberResponseNodes, csr_matrix], ...]
     retained_bytes: int
 
+    @property
+    def cone_density_bytes(self) -> int:
+        """Exact float64 storage for both signed cones on every retained node."""
+        return (
+            2
+            * np.dtype(np.float64).itemsize
+            * sum(len(nodes.axial_index) for nodes, _ in self.blocks)
+        )
+
+    def compile_cone_density(
+        self, mosaic: MosaicParameters, *, quadrature_order: int, maximum_bytes: int
+    ) -> NativeConeDensity:
+        """Prepare explicit candidate-mosaic values for this immutable response."""
+        if type(maximum_bytes) is not int or maximum_bytes < 0:
+            raise ValueError("cone density memory budget must be a nonnegative integer")
+        if type(quadrature_order) is not int or quadrature_order < 4:
+            raise ValueError("cone quadrature order must be an integer of at least four")
+        if self.cone_density_bytes > maximum_bytes:
+            raise MemoryError("cone density memory budget exhausted before allocation")
+        density = SphericalMosaicDensity(mosaic)
+        values = tuple(
+            np.array(
+                [
+                    density.cone_average_sr_inv(
+                        nodes.polar_angle_rad, opening, quadrature_order=quadrature_order
+                    )
+                    for opening in (nodes.cone_angle_rad, np.pi - nodes.cone_angle_rad)
+                ]
+            )
+            for nodes, _ in self.blocks
+        )
+        return NativeConeDensity(self, density, quadrature_order, values)
+
     def evaluate(
-        self, detector: ConditionalStructureDetector, projection: NativePixelRegionProjection
+        self,
+        detector: ConditionalStructureDetector,
+        projection: NativePixelRegionProjection,
+        *,
+        cone_density: NativeConeDensity | None = None,
     ) -> FloatArray:
         if self.revision != detector.native_response_revision(projection):
             raise ValueError("fixed response does not match current geometry, optics or projection")
+        if cone_density is not None and (
+            not isinstance(cone_density, NativeConeDensity)
+            or cone_density.response is not self
+            or cone_density.density.parameters != detector.mosaic
+            or cone_density.quadrature_order != detector.integration_rule.cone_quadrature_order
+        ):
+            raise ValueError("cone density does not match response, mosaic or quadrature")
         tables = [
             detector._strength_table(
                 grid, detector.strength_model, detector.instrument.film_thickness_A
             )
             for grid in self.grids
         ]
-        density = SphericalMosaicDensity(detector.mosaic)
+        density = (
+            SphericalMosaicDensity(detector.mosaic)
+            if cone_density is None
+            else cone_density.density
+        )
         result = np.zeros(self.observation_count)
-        for nodes, probability in self.blocks:
+        for block_index, (nodes, probability) in enumerate(self.blocks):
             mass = _event_mass(
                 nodes,
                 tables[nodes.grid_index],
@@ -292,11 +340,54 @@ class NativeFixedResponse:
                 * detector.polarization_weight
                 * detector.incident.states.source_weight[nodes.source_state_index],
                 detector.integration_rule.cone_quadrature_order,
+                None if cone_density is None else cone_density.values[block_index],
             )
             result += probability.T @ mass
         if np.any(~np.isfinite(result)) or np.any(result < 0):
             raise FloatingPointError("invalid complete fixed native response")
         return result
+
+
+@dataclass(frozen=True, slots=True)
+class NativeConeDensity:
+    """Owned two-sign mosaic densities, aligned with one exact response instance.
+
+    Geometry remains immutable and shared. The density owns its actual mosaic
+    and spherical law; quadrature order is separate from response admission.
+    Retained bytes exclude the shared response and temporary preparation arrays.
+    """
+
+    response: NativeFixedResponse
+    density: SphericalMosaicDensity
+    quadrature_order: int
+    values: tuple[FloatArray, ...]
+    retained_bytes: int = field(init=False)
+
+    def __post_init__(self):
+        if not isinstance(self.response, NativeFixedResponse) or not isinstance(
+            self.density, SphericalMosaicDensity
+        ):
+            raise TypeError("cone density requires an exact native response and spherical law")
+        if type(self.quadrature_order) is not int or self.quadrature_order < 4:
+            raise ValueError("cone quadrature order must be an integer of at least four")
+        if len(self.values) != len(self.response.blocks):
+            raise ValueError("cone density blocks must align with response blocks")
+        values = []
+        for supplied, (nodes, _) in zip(self.values, self.response.blocks, strict=True):
+            reject_complex(supplied, "cone density")
+            value = np.array(supplied, dtype=np.float64, copy=True, order="C")
+            if (
+                value.shape != (2, len(nodes.axial_index))
+                or np.any(~np.isfinite(value))
+                or np.any(value < 0)
+            ):
+                raise ValueError(
+                    "cone densities must be finite, nonnegative and aligned with both signs"
+                )
+            value.setflags(write=False)
+            values.append(value)
+        object.__setattr__(self, "values", tuple(values))
+        object.__setattr__(self, "retained_bytes", sum(value.nbytes for value in values))
 
 
 @dataclass(frozen=True, slots=True)

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from math import fsum
 
 import numpy as np
+from numba.extending import register_jitable
 from numpy.polynomial.legendre import leggauss
 from numpy.typing import ArrayLike, NDArray
 
@@ -25,6 +26,12 @@ _DENSITY_RELATIVE_TOLERANCE = 1.0e-15
 _DENSITY_MAX_TERMS = 100_000
 
 
+@register_jitable
+def _gaussian_exponential(angle_rad, sigma_rad):
+    """Unnormalized Gaussian image, shared by array and compiled cone arithmetic."""
+    return np.exp(-0.5 * (angle_rad / sigma_rad) ** 2)
+
+
 def _wrapped_gaussian_density(angle_rad: FloatArray, sigma_rad: float) -> FloatArray:
     if sigma_rad >= 1.0:
         density = np.ones_like(angle_rad)
@@ -36,18 +43,18 @@ def _wrapped_gaussian_density(angle_rad: FloatArray, sigma_rad: float) -> FloatA
                 return density / (2.0 * np.pi)
         raise RuntimeError("wrapped Gaussian Fourier sum did not converge")
 
-    scaled_density = np.exp(-0.5 * (angle_rad / sigma_rad) ** 2)
+    scaled_density = _gaussian_exponential(angle_rad, sigma_rad)
     # Every noncentral image is below exp(-800), which is exactly zero in
     # float64. This is an underflow identity, not a truncated angular tail.
     if np.max(np.abs(angle_rad), initial=0.0) + 40.0 * sigma_rad < 2.0 * np.pi:
         return scaled_density / (np.sqrt(2.0 * np.pi) * sigma_rad)
     for image in range(1, _DENSITY_MAX_TERMS + 1):
         offset = 2.0 * np.pi * image
-        scaled_density += np.exp(-0.5 * ((angle_rad + offset) / sigma_rad) ** 2)
-        scaled_density += np.exp(-0.5 * ((angle_rad - offset) / sigma_rad) ** 2)
+        scaled_density += _gaussian_exponential(angle_rad + offset, sigma_rad)
+        scaled_density += _gaussian_exponential(angle_rad - offset, sigma_rad)
         next_offset = 2.0 * np.pi * (image + 1)
-        next_pair = np.exp(-0.5 * ((angle_rad + next_offset) / sigma_rad) ** 2)
-        next_pair += np.exp(-0.5 * ((angle_rad - next_offset) / sigma_rad) ** 2)
+        next_pair = _gaussian_exponential(angle_rad + next_offset, sigma_rad)
+        next_pair += _gaussian_exponential(angle_rad - next_offset, sigma_rad)
         if np.all(next_pair <= _DENSITY_RELATIVE_TOLERANCE * scaled_density):
             return scaled_density / (np.sqrt(2.0 * np.pi) * sigma_rad)
     raise RuntimeError("wrapped Gaussian image sum did not converge")

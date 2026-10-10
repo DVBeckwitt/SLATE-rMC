@@ -41,6 +41,10 @@ class NativeJointEvaluator:
     Adaptive rules always prepare candidate-dependent responses. The explicit
     fixed importance rule reuses geometry and region probabilities while
     contracting current signed strength, mosaic, attenuation and source masses.
+    Candidate mosaic densities reuse only for the same response, full mosaic
+    and cone order. One packet per response is retained under the explicit total
+    ``cone_cache_maximum_bytes`` cap; zero disables retention. Oversized packets
+    use the same direct contraction without retaining density arrays.
     Exact completed candidate predictions reuse
     only within this immutable evaluator and observation projection.
     ``spatial_execution`` defaults to per-batch automatic CPU/CUDA deposition;
@@ -59,12 +63,18 @@ class NativeJointEvaluator:
     compile_count: int = field(default=0, init=False)
     evaluation_count: int = field(default=0, init=False)
     contraction_count: int = field(default=0, init=False)
+    cone_compile_count: int = field(default=0, init=False)
+    cone_reuse_count: int = field(default=0, init=False)
     compile_seconds: float = field(default=0, init=False)
     _predictions: OrderedDict = field(default_factory=OrderedDict, init=False, repr=False)
     _responses: OrderedDict = field(default_factory=OrderedDict, init=False, repr=False)
+    _cone_densities: OrderedDict = field(default_factory=OrderedDict, init=False, repr=False)
     scattering_cache: FiberScatteringCache = field(default_factory=FiberScatteringCache, repr=False)
+    cone_cache_maximum_bytes: int = 256 * 1024**2
 
     def __post_init__(self):
+        if type(self.cone_cache_maximum_bytes) is not int or self.cone_cache_maximum_bytes < 0:
+            raise ValueError("cone cache memory budget must be a nonnegative integer")
         if self.spatial_execution not in {"auto", "cpu", "cuda"}:
             raise ValueError("native spatial execution must be auto, cpu or cuda")
         if not isinstance(self.spatial_executor, NativeSpatialExecutor):
@@ -185,7 +195,9 @@ class NativeJointEvaluator:
                 key = detector.native_response_revision(projection)
                 if key not in self._responses:
                     while len(self._responses) >= 2:
-                        self._responses.popitem(last=False)
+                        evicted = next(iter(self._responses))
+                        del self._responses[evicted]
+                        self._cone_densities.pop(evicted, None)
                     response = detector.compile_native_response(projection)
                     self._responses[key] = response
                     object.__setattr__(self, "compile_count", self.compile_count + 1)
@@ -193,7 +205,34 @@ class NativeJointEvaluator:
                         self, "compile_seconds", self.compile_seconds + perf_counter() - start
                     )
                 self._responses.move_to_end(key)
-                predictions.append(self._responses[key].evaluate(detector, projection))
+                response = self._responses[key]
+                cone = self._cone_densities.get(key)
+                order = detector.integration_rule.cone_quadrature_order
+                if cone is not None and (
+                    cone.response is not response
+                    or cone.density.parameters != law
+                    or cone.quadrature_order != order
+                ):
+                    del self._cone_densities[key]
+                    cone = None
+                if cone is not None:
+                    self._cone_densities.move_to_end(key)
+                    object.__setattr__(self, "cone_reuse_count", self.cone_reuse_count + 1)
+                elif (
+                    self.cone_cache_maximum_bytes
+                    and response.cone_density_bytes <= self.cone_cache_maximum_bytes
+                ):
+                    while self._cone_densities and (
+                        self.cone_cache_retained_bytes + response.cone_density_bytes
+                        > self.cone_cache_maximum_bytes
+                    ):
+                        self._cone_densities.popitem(last=False)
+                    cone = response.compile_cone_density(
+                        law, quadrature_order=order, maximum_bytes=self.cone_cache_maximum_bytes
+                    )
+                    self._cone_densities[key] = cone
+                    object.__setattr__(self, "cone_compile_count", self.cone_compile_count + 1)
+                predictions.append(response.evaluate(detector, projection, cone_density=cone))
             else:
                 predictions.append(
                     detector.integrate_native_regions(
@@ -207,11 +246,17 @@ class NativeJointEvaluator:
             object.__setattr__(self, "contraction_count", self.contraction_count + 1)
         return np.stack(predictions) if resolve_mosaic_components else predictions[0]
 
+    @property
+    def cone_cache_retained_bytes(self):
+        """Additional owned float64 storage; response geometry is counted separately."""
+        return sum(value.retained_bytes for value in self._cone_densities.values())
+
     def clear_responses(self):
         self.scattering_cache.entries.clear()
         self.scattering_cache.retained_bytes = 0
         self._predictions.clear()
         self._responses.clear()
+        self._cone_densities.clear()
 
     def inactive_parameters(self, values, coherent_repeats):
         """Exact physical inactivity at mixture boundaries; coordinates stay free.

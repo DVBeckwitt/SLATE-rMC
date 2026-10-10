@@ -846,3 +846,39 @@ across invalid gaps, records background support/control diagnostics and binds th
 incomplete fit; the detector overlays match exactly the 482 fitted profile rows.
 The joint objective also retains 979 Bragg cells, which this profile figure does
 not independently display. No production or retained assessment code changed.
+
+
+### October 9 shared cone acceleration
+
+The subsequent implementation applies to all material bindings: the shared narrow
+Gaussian cone quadrature now uses native CPU compilation through the existing
+Numba dependency, and fixed-importance response evaluation can explicitly reuse
+both signed cone densities for unchanged geometry, actual mosaic and cone order.
+See [shared cone acceleration](NATIVE_REFINEMENT.md#shared-cone-acceleration-and-memory)
+for the automatic bounded cache and direct API. No optimizer or fit was run.
+
+External checks covered 48 width/mixture/sign cases, four independent adaptive
+complete-circle integrals, 48 boundary cases, actual regular/local detector nodes,
+packet ownership, invalidation, capacity and complete nominal detector predictions.
+Old/new component and detector comparisons retained a 2e-12 relative allowance
+plus 32 float64 tiny units per element; cached/uncached new predictions were bitwise
+equal. The complete structural-contrast relative L2 difference was
+3.113877682741444e-14, below the frozen 2e-8 allowance. These checks establish
+implementation equivalence, not estimator convergence or a completed fit.
+
+On the saved restored Bi2Se3 start, one-thread complete nominal contraction took
+7.7032 seconds with the archived kernel, 5.8907 seconds with compiled cone
+arithmetic, and a median 1.1486 seconds over three evaluations with cone reuse
+(6.7 times faster than the archived contraction). Cone preparation took 4.8255
+seconds and retained 33078256 bytes. Geometry compilation still took 386.4496
+seconds and retained 458624780 bytes. These timings exclude geometry setup from
+contraction comparisons and do not predict other materials or higher-resolution
+fit runtime. The prior multi-minute predictions had different execution conditions;
+this comparison does not attribute their entire slowdown to the cone kernel.
+
+The complete nominal check is `cone_native_checks.ra_diag.npz` (SHA256
+`c3d75aa877d58c847523cb0bc9bd5aa616ac14e7ea0ebe316c4913a8f8cce79d`). It retains
+numeric references/results, exact caller and runtime sources. Component, boundary
+and initial slower-kernel evidence are retained externally as separate immutable
+`.ra_diag.npz` packs. All background, preservation and fit-qualification limitations
+from the preceding stage remain. No assessment runner was added to the repository.

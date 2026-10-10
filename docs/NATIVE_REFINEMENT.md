@@ -1064,9 +1064,10 @@ not the adaptive pixel-error estimator. Keep their numerical qualifications dist
 Use `NativeJointEvaluator` on the complete combined projection and full covariance.
 The first prediction compiles sparse native region probabilities on CPU. Later
 candidates reuse them only when geometry, optics, source, proposal, nodes and
-observation memberships match; structure, mosaic, attenuation and the specular
-stitch update at every candidate. `auto` selects this available CPU region compiler;
-forced `cuda` is unsupported here and raises. The pixel-raster path still supports
+observation memberships match. Structure, attenuation and the specular stitch update
+at every candidate. Both signed cone densities may reuse only with unchanged actual
+mosaic parameters, cone quadrature order and exact response instance. `auto` selects
+this available CPU region compiler; forced `cuda` is unsupported here and raises. The pixel-raster path still supports
 automatic CPU/CUDA execution. No per-peak scaling or additional background is implied.
 
 Complete one bounded starting prediction, compare cached and direct same-node
@@ -1077,3 +1078,33 @@ strength-dependent Gaussian nodes and call them this fixed rule. All signed coun
 background support limitations and nominal/selected distinctions remain in force.
 The retained response cap excludes transient allocations, so callers separately
 supervise RSS and elapsed time.
+
+
+### Shared cone acceleration and memory
+
+The cone integral is shared by every material binding. Narrow Gaussian widths
+(`sqrt(float64.tiny) <= sigma < pi/40`, radians) use the existing Numba dependency
+to compile the scalar quadrature with float64 arithmetic and no fast-math. The
+panels, nodes, spherical normalization and signed-cone measure are unchanged;
+only terms guaranteed to underflow to zero are skipped. Wider and subnormal widths
+retain the existing wrapped-image/Fourier calculation. First use includes native
+compilation, so distinguish that setup time from repeated candidate timing.
+
+For fixed-importance fitting, `NativeJointEvaluator` automatically retains one
+immutable `NativeConeDensity` packet per response when it fits within
+`cone_cache_maximum_bytes` (default 256 MiB total, independent of the geometry cap).
+A structural update at fixed geometry and mosaic reuses these densities; a changed
+mosaic or cone order rebuilds them. Geometry eviction releases the associated
+packet. Use `cone_cache_maximum_bytes=0` to disable retention. Oversized packets
+use the same direct calculation, without changing precision or the physical model.
+`cone_compile_count`, `cone_reuse_count` and `cone_cache_retained_bytes` expose this
+work and storage. `clear_responses()` releases both response and cone caches.
+
+Direct response callers can use `response.compile_cone_density(mosaic,
+quadrature_order=order, maximum_bytes=budget)` and pass the result as
+`response.evaluate(detector, projection, cone_density=packet)`. A mismatched owner,
+mosaic or order raises before contraction. The cap counts retained density arrays;
+preparation copies, shared geometry and process/JIT memory require separate bounds.
+The adaptive estimator benefits from the compiled cone arithmetic but does not
+reuse fixed-response packets. This acceleration adds no optimizer and changes no
+background, covariance, preservation gate or fit-qualification requirement.

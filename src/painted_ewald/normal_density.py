@@ -2,16 +2,55 @@
 
 from dataclasses import dataclass, field
 
+import numba
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from painted_ewald.mosaic import (
     _component_quadrature,
+    _gaussian_exponential,
     _wrapped_gaussian_density,
     _wrapped_lorentzian_density,
 )
 from painted_ewald.types import MosaicParameters
 from painted_ewald.validation import reject_complex
+
+
+@numba.njit(nogil=True, fastmath=False, cache=False)
+def _narrow_gaussian_cone_integral(delta, sine_product, scale, sigma, node, weight):
+    """Full [0, pi] integral where noncentral Gaussian images underflow exactly.
+
+    The caller proves sqrt(float64.tiny) <= sigma < pi/40. Each event owns its
+    panel and node reductions; no reassociation or parallel reduction is used.
+    """
+    result = np.zeros(len(delta))
+    normalization = np.sqrt(2 * np.pi) * sigma
+    zero_sine_squared = np.sin(20 * sigma) ** 2
+    for i in range(len(delta)):
+        offset = np.sin(delta[i] / 2) ** 2
+        lower, upper = 0.0, scale[i]
+        total = 0.0
+        while lower < np.pi:
+            # Tilt increases throughout [0, pi]. Beyond 40 sigma every
+            # remaining Gaussian value is exactly zero in float64, not a tail cut.
+            if offset + sine_product[i] * np.sin(lower / 2) ** 2 >= zero_sine_squared:
+                break
+            half = (upper - lower) / 2
+            midpoint = (upper + lower) / 2
+            panel = 0.0
+            for j in range(len(node)):
+                psi = midpoint + half * node[j]
+                sine_squared = offset + sine_product[i] * np.sin(psi / 2) ** 2
+                sine_squared = min(1.0, max(0.0, sine_squared))
+                if sine_squared >= zero_sine_squared:
+                    continue
+                angle = 2 * np.arctan2(np.sqrt(sine_squared), np.sqrt(1 - sine_squared))
+                panel += (_gaussian_exponential(angle, sigma) / normalization) * weight[j]
+            total += half * panel
+            lower = upper
+            upper = min(np.pi, 2 * upper)
+        result[i] = total
+    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,18 +201,27 @@ class SphericalMosaicDensity:
                 scale = np.minimum(
                     np.pi, sigma / np.sqrt(np.maximum(curvature, np.finfo(float).tiny))
                 )
-                lower = np.zeros(len(selected))
-                upper = scale.copy()
-                total = np.zeros(len(selected))
-                while np.any(lower < np.pi):
-                    half = (upper - lower) / 2
-                    psi = (upper + lower)[:, None] / 2 + half[:, None] * node
-                    sine_squared = np.sin(dd[:, None] / 2) ** 2 + bb[:, None] * np.sin(psi / 2) ** 2
-                    sine_squared = np.clip(sine_squared, 0, 1)
-                    angle = 2 * np.arctan2(np.sqrt(sine_squared), np.sqrt(1 - sine_squared))
-                    total += half * (_wrapped_gaussian_density(angle, sigma) @ weight)
-                    lower = upper
-                    upper = np.minimum(np.pi, 2 * upper)
+                if np.sqrt(np.finfo(float).tiny) <= sigma < np.pi / 40:
+                    # All angles lie in [0, pi]: the shared 40-sigma image
+                    # underflow identity admits a fused single-image integral.
+                    total = _narrow_gaussian_cone_integral(dd, bb, scale, sigma, node, weight)
+                else:
+                    # Wide and subnormal widths retain the general wrapped law
+                    # and its array-wide image/Fourier stopping rules.
+                    lower = np.zeros(len(selected))
+                    upper = scale.copy()
+                    total = np.zeros(len(selected))
+                    while np.any(lower < np.pi):
+                        half = (upper - lower) / 2
+                        psi = (upper + lower)[:, None] / 2 + half[:, None] * node
+                        sine_squared = (
+                            np.sin(dd[:, None] / 2) ** 2 + bb[:, None] * np.sin(psi / 2) ** 2
+                        )
+                        sine_squared = np.clip(sine_squared, 0, 1)
+                        angle = 2 * np.arctan2(np.sqrt(sine_squared), np.sqrt(1 - sine_squared))
+                        total += half * (_wrapped_gaussian_density(angle, sigma) @ weight)
+                        lower = upper
+                        upper = np.minimum(np.pi, 2 * upper)
                 out[selected] += (1 - eta) * total / (np.pi**2 * self.gaussian_normalization)
         result[~degenerate] = out
         return result.reshape(shape)

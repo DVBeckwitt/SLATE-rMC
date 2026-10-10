@@ -28,8 +28,15 @@ support and original attempted divisors remain; repaired CDF inversion keeps its
 
 `NativeFixedResponse` retains grids, geometry factors and sparse weighted region
 probabilities only under an explicit projection/source/optics/geometry/proposal/rule
-identity. Every evaluation recomputes signed strengths, spherical mosaic, thickness
-attenuation and local stitch, and applies original source probability once. A changed
+identity. Every evaluation recomputes signed strengths, thickness attenuation and
+local stitch, and applies original source probability once. An explicit immutable
+`NativeConeDensity` packet may reuse both signed spherical cone densities only for
+the exact response instance, actual mosaic parameters and cone quadrature order.
+`NativeJointEvaluator` retains at most one such packet per response under a separate
+256 MiB total numeric-array cap (`cone_cache_maximum_bytes`); zero disables this
+retention and oversized packets use the same uncached calculation. Changing the
+mosaic replaces its packet; response eviction also releases that packet. These
+shared mechanisms apply to every material using this estimator. A changed response
 identity requires compilation. The default 1 GiB cap covers retained numeric grid/node/CSR
 arrays, excluding temporary projection/transfer storage and Python metadata; callers
 must separately bound process memory. The evaluator retains at most two such
